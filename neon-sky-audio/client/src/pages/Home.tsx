@@ -13,7 +13,7 @@
  * - Touch events handled for mobile seek
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Disc,
   Download,
@@ -31,37 +31,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { parseBlob } from "music-metadata";
-
-type Phase = "splash" | "boot" | "player";
-type VizMode = "bars" | "wave";
-type Band = "low" | "mid" | "high";
-
-type TrackState = {
-  title: string;
-  artist: string;
-  album: string;
-  artwork: string | null;
-  duration: number;
-  currentTime: number;
-};
-
-type PlaylistItem = {
-  id: string;
-  file: File;
-  url: string;
-  title: string;
-  artist: string;
-  album: string;
-  artwork: string | null;
-};
+import { useAudioEngine, type Band, type Phase } from "../hooks/useAudioEngine";
 
 const NEON = {
   hex: "#bc13fe", // cyberpunk purple
   rgba: "188,19,254",
 } as const;
 
-const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 const cx = (...parts: Array<string | false | undefined | null>) => parts.filter(Boolean).join(" ");
 
 const formatTime = (s: number) => {
@@ -71,98 +47,57 @@ const formatTime = (s: number) => {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
 
-// Parse ID3 metadata using music-metadata
-const parseID3Tags = async (file: File): Promise<{ title?: string; artist?: string; album?: string; artwork?: string }> => {
-  try {
-    const metadata = await parseBlob(file);
-    let artworkUrl: string | undefined;
-
-    // Extract artwork if present
-    if (metadata.common.picture && metadata.common.picture.length > 0) {
-      const picture = metadata.common.picture[0];
-      const blob = new Blob([picture.data], { type: picture.format });
-      artworkUrl = URL.createObjectURL(blob);
-    }
-
-    return {
-      title: metadata.common.title,
-      artist: metadata.common.artist,
-      album: metadata.common.album,
-      artwork: artworkUrl,
-    };
-  } catch (err) {
-    console.warn("Failed to parse metadata:", err);
-    return {};
-  }
-};
-
 export default function Home() {
   // -------- App/UI State --------
   const [phase, setPhase] = useState<Phase>("splash");
   const [suiteOpen, setSuiteOpen] = useState(false);
-  const [vizMode, setVizMode] = useState<VizMode>("bars");
-
-  const [isLoading, setIsLoading] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [activeBand, setActiveBand] = useState<Band>("mid");
-  const [eq, setEq] = useState<Record<Band, number>>({ low: 0, mid: 0, high: 0 });
-
-  // Volume state
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
-  const previousVolumeRef = useRef(1);
-
-  // Seek dragging state (ring)
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragProgress, setDragProgress] = useState(0);
-
-  // Playlist
-  const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [queueOpen, setQueueOpen] = useState(false);
 
-  const [track, setTrack] = useState<TrackState>({
-    title: "NO_TRACK_LOADED",
-    artist: "NEON_SKY_OS",
-    album: "",
-    artwork: null,
-    duration: 0,
-    currentTime: 0,
-  });
-
-  // -------- DOM refs (PERSISTENT) --------
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const vizCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const graphEqRef = useRef<HTMLDivElement | null>(null);
-  const seekRingRef = useRef<HTMLDivElement | null>(null);
-
-  // -------- WebAudio refs --------
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const gainRef = useRef<GainNode | null>(null);
-  const filtersRef = useRef<Record<Band, BiquadFilterNode | null>>({ low: null, mid: null, high: null });
-
-  // Export/Recorder
-  const destRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<BlobPart[]>([]);
-
-  // Visualizer loop
-  const rafRef = useRef<number | null>(null);
-
-  // Object URL cleanup handled via playlist items
-
-  // iOS/Safari detection
-  const isIOSRef = useRef(false);
-  useEffect(() => {
-    isIOSRef.current = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  }, []);
+  const {
+    vizMode,
+    setVizMode,
+    isLoading,
+    isExporting,
+    error,
+    clearError,
+    isPlaying,
+    activeBand,
+    setActiveBand,
+    eq,
+    volume,
+    isMuted,
+    track,
+    playlist,
+    currentIndex,
+    isDragging,
+    progressPct,
+    progressNowSeconds,
+    canPlay,
+    canExport,
+    audioRef,
+    fileInputRef,
+    vizCanvasRef,
+    graphEqRef,
+    seekRingRef,
+    initAudio,
+    handleFile,
+    togglePlay,
+    prevTrack,
+    nextTrack,
+    loadTrackAt,
+    onRingPointerDown,
+    onRingPointerMove,
+    onRingPointerUp,
+    onRingPointerCancel,
+    handleVolumeChange,
+    toggleMute,
+    startExport,
+    applyBandGain,
+    resetEq,
+    onGraphMouseDown,
+    onGraphTouchStart,
+    onGraphTouchMove,
+  } = useAudioEngine({ visualizerColor: NEON.rgba, visualizerActive: phase === "player" });
 
   // -------- Phase timing --------
   useEffect(() => {
@@ -170,622 +105,10 @@ export default function Home() {
     return () => window.clearTimeout(t);
   }, []);
 
-  // -------- Canvas DPR sizing --------
-  const resizeCanvas = useCallback(() => {
-    const canvas = vizCanvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.floor(rect.width * dpr));
-    const h = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-  }, []);
-
-  useEffect(() => {
-    resizeCanvas();
-    window.addEventListener("resize", resizeCanvas);
-    return () => window.removeEventListener("resize", resizeCanvas);
-  }, [resizeCanvas]);
-
-  // -------- Ensure AudioContext resumes on iOS/Safari --------
-  const ensureAudioCtxResumed = useCallback(async () => {
-    if (audioCtxRef.current) {
-      if (audioCtxRef.current.state === "suspended") {
-        try {
-          await audioCtxRef.current.resume();
-        } catch (err) {
-          console.warn("Failed to resume AudioContext:", err);
-        }
-      }
-    }
-  }, []);
-
-  // -------- Core init (creates graph ONCE, bound to persistent audio el) --------
-  const initAudio = useCallback(async () => {
-    try {
-      setError(null);
-
-      const audioEl = audioRef.current;
-      if (!audioEl) throw new Error("Audio element not ready.");
-
-      // For iOS/Safari: AudioContext must be created in response to user gesture
-      if (!audioCtxRef.current) {
-        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        audioCtxRef.current = new Ctx();
-
-        // Immediately try to resume for iOS
-        if (audioCtxRef.current.state === "suspended") {
-          await audioCtxRef.current.resume();
-        }
-
-        analyserRef.current = audioCtxRef.current.createAnalyser();
-        analyserRef.current.fftSize = 512;
-        analyserRef.current.smoothingTimeConstant = 0.8;
-
-        gainRef.current = audioCtxRef.current.createGain();
-        gainRef.current.gain.value = volume;
-
-        const low = audioCtxRef.current.createBiquadFilter();
-        low.type = "lowshelf";
-        low.frequency.value = 250;
-
-        const mid = audioCtxRef.current.createBiquadFilter();
-        mid.type = "peaking";
-        mid.frequency.value = 1000;
-        mid.Q.value = 1.0;
-
-        const high = audioCtxRef.current.createBiquadFilter();
-        high.type = "highshelf";
-        high.frequency.value = 5000;
-
-        filtersRef.current = { low, mid, high };
-
-        // Critical: this must be called only once for this exact audio element instance.
-        sourceRef.current = audioCtxRef.current.createMediaElementSource(audioEl);
-
-        sourceRef.current.connect(low);
-        low.connect(mid);
-        mid.connect(high);
-        high.connect(gainRef.current);
-        gainRef.current.connect(analyserRef.current);
-        analyserRef.current.connect(audioCtxRef.current.destination);
-
-        // Export tap post-chain
-        destRef.current = audioCtxRef.current.createMediaStreamDestination();
-        gainRef.current.connect(destRef.current);
-
-        recorderRef.current = new MediaRecorder(destRef.current.stream);
-        recorderRef.current.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
-        };
-        recorderRef.current.onstop = () => {
-          const mime = recorderRef.current?.mimeType || "audio/webm";
-          const blob = new Blob(recordedChunksRef.current, { type: mime });
-          recordedChunksRef.current = [];
-
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `Mastered_${track.title || "export"}.webm`;
-          a.click();
-          URL.revokeObjectURL(url);
-
-          setIsExporting(false);
-        };
-      }
-
-      await ensureAudioCtxResumed();
-
-      setPhase("player");
-      startVisualizer();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(`Failed to initialize audio: ${message}`);
-    }
-  }, [ensureAudioCtxResumed, startVisualizer, track.title, volume]);
-
-  // -------- Playlist helpers --------
-  const revokePlaylistUrls = useCallback((items: PlaylistItem[]) => {
-    for (const it of items) {
-      try {
-        if (it.url) URL.revokeObjectURL(it.url);
-      } catch {
-        // ignore
-      }
-      try {
-        if (it.artwork) URL.revokeObjectURL(it.artwork);
-      } catch {
-        // ignore
-      }
-    }
-  }, []);
-
-  const loadTrackAt = useCallback(
-    async (index: number, opts?: { autoplay?: boolean }) => {
-      const audioEl = audioRef.current;
-      if (!audioEl) return;
-      const item = playlist[index];
-      if (!item) return;
-
-      setError(null);
-      setIsLoading(true);
-      setCurrentIndex(index);
-
-      audioEl.src = item.url;
-      audioEl.load();
-
-      setTrack((prev) => ({
-        ...prev,
-        title: item.title,
-        artist: item.artist,
-        album: item.album,
-        artwork: item.artwork,
-        currentTime: 0,
-        duration: 0,
-      }));
-
-      setIsPlaying(false);
-      if (opts?.autoplay) {
-        try {
-          await ensureAudioCtxResumed();
-          await audioEl.play();
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          setError(`Playback failed: ${message}`);
-        }
-      }
-    },
-    [ensureAudioCtxResumed, playlist]
-  );
-
-  const playNext = useCallback(
-    async (opts?: { autoplay?: boolean }) => {
-      if (playlist.length === 0) return;
-      const next = clamp(currentIndex + 1, 0, playlist.length - 1);
-      if (next === currentIndex) return;
-      await loadTrackAt(next, opts);
-    },
-    [currentIndex, loadTrackAt, playlist.length]
-  );
-
-  const playPrev = useCallback(
-    async (opts?: { autoplay?: boolean }) => {
-      if (playlist.length === 0) return;
-      const prev = clamp(currentIndex - 1, 0, playlist.length - 1);
-      if (prev === currentIndex) return;
-      await loadTrackAt(prev, opts);
-    },
-    [currentIndex, loadTrackAt, playlist.length]
-  );
-
-  const prevTrack = useCallback(() => {
-    void playPrev({ autoplay: true });
-  }, [playPrev]);
-
-  const nextTrack = useCallback(() => {
-    void playNext({ autoplay: true });
-  }, [playNext]);
-
-  // -------- Audio event syncing --------
-  useEffect(() => {
-    const audioEl = audioRef.current;
-    if (!audioEl) return;
-
-    const onTime = () => {
-      if (!isDragging) {
-        setTrack((prev) => ({
-          ...prev,
-          currentTime: audioEl.currentTime || 0,
-          duration: Number.isFinite(audioEl.duration) ? audioEl.duration : prev.duration,
-        }));
-      }
-    };
-
-    const onLoaded = () => {
-      setIsLoading(false);
-      onTime();
-    };
-
-    const onWaiting = () => setIsLoading(true);
-    const onErr = () => setError(`Audio error: ${audioEl.error?.message || "Unknown error"}`);
-
-    const onPlay = () => {
-      setIsPlaying(true);
-      // Ensure AudioContext is running when playback starts (iOS fix)
-      ensureAudioCtxResumed();
-    };
-    const onPause = () => setIsPlaying(false);
-
-    const onEnded = () => {
-      setIsPlaying(false);
-      if (isExporting && recorderRef.current?.state === "recording") recorderRef.current.stop();
-
-      // Auto-advance playlist (non-looping)
-      if (playlist.length > 1 && currentIndex < playlist.length - 1) {
-        // Next track: autoplay
-        void loadTrackAt(currentIndex + 1, { autoplay: true });
-      }
-    };
-
-    audioEl.addEventListener("timeupdate", onTime);
-    audioEl.addEventListener("loadedmetadata", onTime);
-    audioEl.addEventListener("canplay", onLoaded);
-    audioEl.addEventListener("waiting", onWaiting);
-    audioEl.addEventListener("error", onErr);
-    audioEl.addEventListener("play", onPlay);
-    audioEl.addEventListener("pause", onPause);
-    audioEl.addEventListener("ended", onEnded);
-
-    return () => {
-      audioEl.removeEventListener("timeupdate", onTime);
-      audioEl.removeEventListener("loadedmetadata", onTime);
-      audioEl.removeEventListener("canplay", onLoaded);
-      audioEl.removeEventListener("waiting", onWaiting);
-      audioEl.removeEventListener("error", onErr);
-      audioEl.removeEventListener("play", onPlay);
-      audioEl.removeEventListener("pause", onPause);
-      audioEl.removeEventListener("ended", onEnded);
-    };
-  }, [isExporting, isDragging, ensureAudioCtxResumed, playlist.length, currentIndex, loadTrackAt]);
-
-  // -------- Load file with ID3 metadata extraction --------
-  const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    const audioEl = audioRef.current;
-    if (files.length === 0 || !audioEl) return;
-
-    setError(null);
-    setIsLoading(true);
-
-    // Replace playlist with new selection (simplest, predictable UX)
-    setIsPlaying(false);
-    setCurrentIndex(0);
-
-    // Revoke previous playlist URLs
-    revokePlaylistUrls(playlist);
-
-    const nextItems: PlaylistItem[] = [];
-    for (const file of files) {
-      const url = URL.createObjectURL(file);
-
-      // Default values from filename
-      let title = file.name.replace(/\.[^/.]+$/, "");
-      let artist = "Unknown Artist";
-      let album = "";
-      let artwork: string | null = null;
-
-      // Check for "Artist - Title" format in filename
-      const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-      if (dashMatch) {
-        artist = dashMatch[1].trim();
-        title = dashMatch[2].trim();
-      }
-
-      // Try to extract ID3 metadata
-      try {
-        const metadata = await parseID3Tags(file);
-        if (metadata.title) title = metadata.title;
-        if (metadata.artist) artist = metadata.artist;
-        if (metadata.album) album = metadata.album;
-        if (metadata.artwork) artwork = metadata.artwork;
-      } catch {
-        // ignore
-      }
-
-      nextItems.push({
-        id: `${file.name}-${file.size}-${file.lastModified}`,
-        file,
-        url,
-        title,
-        artist,
-        album,
-        artwork,
-      });
-    }
-
-    setPlaylist(nextItems);
-
-    // Load first track (no autoplay)
-    const first = nextItems[0];
-    if (first) {
-      audioEl.src = first.url;
-      audioEl.load();
-      setTrack((prev) => ({
-        ...prev,
-        title: first.title,
-        artist: first.artist,
-        album: first.album,
-        artwork: first.artwork,
-        currentTime: 0,
-        duration: 0,
-      }));
-    }
-    
-    // Reset file input so same file can be loaded again
-    e.target.value = "";
-  }, [playlist, revokePlaylistUrls]);
-
-  // -------- Play toggle with iOS fix --------
-  const togglePlay = useCallback(async () => {
-    const audioEl = audioRef.current;
-    if (!audioEl) return;
-
-    try {
-      // Always ensure AudioContext is resumed on user interaction (iOS requirement)
-      await ensureAudioCtxResumed();
-      
-      if (audioEl.paused) {
-        await audioEl.play();
-      } else {
-        audioEl.pause();
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(`Playback failed: ${message}`);
-    }
-  }, [ensureAudioCtxResumed]);
-
-  // -------- Circular seek ring (touch + mouse via Pointer Events) --------
-  const calcRingProgress = useCallback((clientX: number, clientY: number) => {
-    const el = seekRingRef.current;
-    if (!el) return 0;
-    const rect = el.getBoundingClientRect();
-    const cx0 = rect.left + rect.width / 2;
-    const cy0 = rect.top + rect.height / 2;
-    const dx = clientX - cx0;
-    const dy = clientY - cy0;
-
-    // Angle where 0 is at top, increasing clockwise.
-    const angle = Math.atan2(dy, dx);
-    let a = angle + Math.PI / 2;
-    if (a < 0) a += Math.PI * 2;
-    return clamp(a / (Math.PI * 2), 0, 1);
-  }, []);
-
-  const ringSeekTo = useCallback(
-    (p: number, commit: boolean) => {
-      const audioEl = audioRef.current;
-      if (!track.duration) return;
-      const pct = clamp(p, 0, 1);
-      setDragProgress(pct * 100);
-      if (!commit) return;
-      if (!audioEl) return;
-      const newTime = pct * track.duration;
-      audioEl.currentTime = newTime;
-      setTrack((prev) => ({ ...prev, currentTime: newTime }));
-    },
-    [track.duration]
-  );
-
-  const onRingPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (!track.duration) return;
-      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-      setIsDragging(true);
-      const p = calcRingProgress(e.clientX, e.clientY);
-      ringSeekTo(p, false);
-    },
-    [calcRingProgress, ringSeekTo, track.duration]
-  );
-
-  const onRingPointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!isDragging) return;
-      const p = calcRingProgress(e.clientX, e.clientY);
-      ringSeekTo(p, false);
-    },
-    [calcRingProgress, isDragging, ringSeekTo]
-  );
-
-  const onRingPointerUp = useCallback(
-    (e: React.PointerEvent) => {
-      if (!isDragging) return;
-      const p = calcRingProgress(e.clientX, e.clientY);
-      ringSeekTo(p, true);
-      setIsDragging(false);
-    },
-    [calcRingProgress, isDragging, ringSeekTo]
-  );
-
-  // -------- Volume control --------
-  const handleVolumeChange = useCallback((newVolume: number) => {
-    const clampedVolume = clamp(newVolume, 0, 1);
-    setVolume(clampedVolume);
-    setIsMuted(clampedVolume === 0);
-
-    if (gainRef.current) {
-      gainRef.current.gain.value = clampedVolume;
-    }
-  }, []);
-
-  const toggleMute = useCallback(() => {
-    if (isMuted) {
-      const restoreVolume = previousVolumeRef.current > 0 ? previousVolumeRef.current : 1;
-      handleVolumeChange(restoreVolume);
-    } else {
-      previousVolumeRef.current = volume;
-      handleVolumeChange(0);
-    }
-  }, [isMuted, volume, handleVolumeChange]);
-
-  // -------- Export bounce --------
-  const startExport = useCallback(async () => {
-    const audioEl = audioRef.current;
-    const rec = recorderRef.current;
-
-    if (!audioEl) return setError("Audio element missing.");
-    if (!rec) return setError("Recorder not ready. Initialize Core first.");
-    if (!audioEl.src) return setError("No audio loaded.");
-    if (rec.state === "recording") return;
-
-    try {
-      await ensureAudioCtxResumed();
-      setError(null);
-
-      setIsExporting(true);
-      recordedChunksRef.current = [];
-
-      audioEl.currentTime = 0;
-      rec.start();
-      await audioEl.play();
-    } catch (err: unknown) {
-      setIsExporting(false);
-      const message = err instanceof Error ? err.message : String(err);
-      setError(`Export failed: ${message}`);
-    }
-  }, [ensureAudioCtxResumed]);
-
-  // -------- EQ --------
-  const applyBandGain = useCallback((band: Band, gainDb: number) => {
-    const g = clamp(gainDb, -24, 24);
-    setActiveBand(band);
-    setEq((prev) => ({ ...prev, [band]: g }));
-    const node = filtersRef.current[band];
-    if (node) node.gain.value = g;
-  }, []);
-
-  const resetEq = useCallback(() => {
-    (["low", "mid", "high"] as Band[]).forEach((b) => applyBandGain(b, 0));
-  }, [applyBandGain]);
-
-  const handleGraphDrag = useCallback(
-    (clientX: number, clientY: number) => {
-      const surface = graphEqRef.current;
-      if (!surface) return;
-
-      const rect = surface.getBoundingClientRect();
-      const x = (clientX - rect.left) / rect.width;
-      const y = (clientY - rect.top) / rect.height;
-
-      let band: Band = "mid";
-      if (x < 0.33) band = "low";
-      else if (x > 0.66) band = "high";
-
-      const gainDb = Math.round((0.5 - y) * 48);
-      applyBandGain(band, gainDb);
-    },
-    [applyBandGain]
-  );
-
-  const onGraphMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.button !== 0) return;
-      handleGraphDrag(e.clientX, e.clientY);
-
-      const move = (ev: MouseEvent) => handleGraphDrag(ev.clientX, ev.clientY);
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    },
-    [handleGraphDrag]
-  );
-
-  const onGraphTouchStart = useCallback(
-    (e: React.TouchEvent) => {
-      const t = e.touches[0];
-      if (t) handleGraphDrag(t.clientX, t.clientY);
-    },
-    [handleGraphDrag]
-  );
-
-  const onGraphTouchMove = useCallback(
-    (e: React.TouchEvent) => {
-      const t = e.touches[0];
-      if (t) handleGraphDrag(t.clientX, t.clientY);
-    },
-    [handleGraphDrag]
-  );
-
-  // -------- Visualizer with iOS compatibility --------
-  const startVisualizer = useCallback(() => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-    const loop = () => {
-      rafRef.current = requestAnimationFrame(loop);
-      const analyser = analyserRef.current;
-      const canvas = vizCanvasRef.current;
-      if (!analyser || !canvas) return;
-
-      resizeCanvas();
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      const w = canvas.width;
-      const h = canvas.height;
-
-      ctx.clearRect(0, 0, w, h);
-
-      const len = analyser.frequencyBinCount;
-      const data = new Uint8Array(len);
-
-      if (vizMode === "bars") {
-        analyser.getByteFrequencyData(data);
-
-        const barWidth = Math.max(1, Math.floor((w / len) * 2.2));
-        let x = 0;
-
-        for (let i = 0; i < len; i++) {
-          const amp = data[i] / 255;
-          const barHeight = amp * h;
-          const alpha = Math.max(0.18, amp);
-          ctx.fillStyle = `rgba(${NEON.rgba},${alpha})`;
-          ctx.fillRect(x, h - barHeight, barWidth, barHeight);
-          x += barWidth + 1;
-          if (x > w) break;
-        }
-      } else {
-        analyser.getByteTimeDomainData(data);
-
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(${NEON.rgba},0.95)`;
-        ctx.lineWidth = Math.max(1, Math.floor(w / 450));
-
-        const slice = w / len;
-        let x = 0;
-        for (let i = 0; i < len; i++) {
-          const v = data[i] / 128 - 1;
-          const y = h / 2 + v * (h * 0.35);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-          x += slice;
-        }
-        ctx.stroke();
-      }
-    };
-
-    loop();
-  }, [resizeCanvas, vizMode]);
-
-  useEffect(() => {
-    if (phase === "player") startVisualizer();
-  }, [phase, vizMode, startVisualizer]);
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      revokePlaylistUrls(playlist);
-    };
-  }, [playlist, revokePlaylistUrls]);
-
-  // -------- Derived UI --------
-  const progressPct = useMemo(() => {
-    if (isDragging) return dragProgress;
-    if (!track.duration || track.duration <= 0) return 0;
-    return clamp((track.currentTime / track.duration) * 100, 0, 100);
-  }, [track.currentTime, track.duration, isDragging, dragProgress]);
-
-  const progressNowSeconds = useMemo(() => {
-    if (!track.duration) return 0;
-    if (!isDragging) return track.currentTime;
-    return (dragProgress / 100) * track.duration;
-  }, [dragProgress, isDragging, track.currentTime, track.duration]);
-
-  const canPlay = Boolean(audioRef.current?.src);
-  const canExport = canPlay && Boolean(recorderRef.current);
+  const handleInit = async () => {
+    const ok = await initAudio();
+    if (ok) setPhase("player");
+  };
 
   // -------- Styles --------
   const bgStyle = useMemo(
@@ -811,7 +134,7 @@ export default function Home() {
       {error && (
         <div className="fixed top-4 left-4 right-4 z-[60] max-w-2xl mx-auto rounded-2xl border border-red-500/30 bg-red-500/10 backdrop-blur-xl p-3 flex items-start justify-between gap-3">
           <div className="text-xs sm:text-sm text-red-200">{error}</div>
-          <button onClick={() => setError(null)} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition flex-shrink-0" aria-label="Dismiss">
+          <button onClick={clearError} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition flex-shrink-0" aria-label="Dismiss">
             <X size={16} />
           </button>
         </div>
@@ -854,7 +177,7 @@ export default function Home() {
           </div>
 
           <button
-            onClick={initAudio}
+            onClick={handleInit}
             className="w-full py-4 sm:py-6 border-2 border-green-500 text-green-500 font-bold hover:bg-green-500 hover:text-black transition-all uppercase tracking-[0.2em] sm:tracking-[0.3em] text-sm sm:text-base active:scale-[0.98]"
           >
             Initialize Core
@@ -921,6 +244,7 @@ export default function Home() {
                   onPointerDown={onRingPointerDown}
                   onPointerMove={onRingPointerMove}
                   onPointerUp={onRingPointerUp}
+                  onPointerCancel={onRingPointerCancel}
                   className={cx(
                     "relative w-24 h-24 sm:w-28 sm:h-28 select-none touch-none",
                     track.duration ? "cursor-pointer" : "cursor-default"
