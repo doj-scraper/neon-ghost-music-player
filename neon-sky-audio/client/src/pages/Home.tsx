@@ -170,7 +170,7 @@ export default function Home() {
     <div className="min-h-screen min-h-[100dvh] bg-black text-white font-mono selection:bg-cyan-500 selection:text-black relative overflow-hidden">
       {/* Persistent elements (never unmount) */}
       <audio ref={audioRef} className="hidden" playsInline crossOrigin="anonymous" />
-      <input ref={fileInputRef} type="file" className="hidden" accept="audio/*" multiple onChange={handleFile} />
+      <input ref={fileInputRef} type="file" className="hidden" multiple onChange={handleFile} />
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
       <div className="fixed inset-0 pointer-events-none opacity-25 z-0">
