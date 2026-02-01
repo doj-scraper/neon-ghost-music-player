@@ -1,0 +1,7 @@
+{
+  "framework": "vite",
+  "installCommand": "cd neon-sky-audio && npm install",
+  "buildCommand": "cd neon-sky-audio && npm run build",
+  "outputDirectory": "neon-sky-audio/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
