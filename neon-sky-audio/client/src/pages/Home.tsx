@@ -1,5 +1,5 @@
 /**
- * NEON SKY Audio Mastering VM v3.5
+ * NEON SKY Audio Mastering Suite v4
  * Design: Liquid Neon Glassmorphism
  * - Frosted glass surfaces with deep blur effects
  * - Luminous neon cyan accents that appear to glow
@@ -13,7 +13,8 @@
  * - Touch events handled for mobile seek
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import {
   Disc,
   Download,
@@ -47,11 +48,20 @@ const formatTime = (s: number) => {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
 
+const formatDb = (value: number, digits = 1) => {
+  if (!Number.isFinite(value) || value <= -120) return "--";
+  return value.toFixed(digits);
+};
+
+const toDb = (gain: number) => 20 * Math.log10(Math.max(gain, 0.000001));
+const clampValue = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
 export default function Home() {
   // -------- App/UI State --------
   const [phase, setPhase] = useState<Phase>("splash");
   const [suiteOpen, setSuiteOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const presetInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
     vizMode,
@@ -64,6 +74,12 @@ export default function Home() {
     activeBand,
     setActiveBand,
     eq,
+    compressor,
+    limiter,
+    saturation,
+    stereo,
+    output,
+    meter,
     volume,
     isMuted,
     track,
@@ -97,6 +113,24 @@ export default function Home() {
     onGraphMouseDown,
     onGraphTouchStart,
     onGraphTouchMove,
+    presetA,
+    presetB,
+    activePresetSlot,
+    gainMatchEnabled,
+    normalizeLoudness,
+    targetLufs,
+    setCompressor,
+    setLimiter,
+    setSaturation,
+    setStereo,
+    setOutput,
+    setGainMatchEnabled,
+    setNormalizeLoudness,
+    setTargetLufs,
+    storePresetSlot,
+    recallPresetSlot,
+    exportPresetJson,
+    importPresetJson,
   } = useAudioEngine({ visualizerColor: NEON.rgba, visualizerActive: phase === "player" });
 
   // -------- Phase timing --------
@@ -108,6 +142,18 @@ export default function Home() {
   const handleInit = async () => {
     const ok = await initAudio();
     if (ok) setPhase("player");
+  };
+
+  const handlePresetImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await importPresetJson(file);
+    } catch (err) {
+      console.warn("Failed to import preset:", err);
+    } finally {
+      event.target.value = "";
+    }
   };
 
   // -------- Styles --------
@@ -125,6 +171,7 @@ export default function Home() {
       {/* Persistent elements (never unmount) */}
       <audio ref={audioRef} className="hidden" playsInline crossOrigin="anonymous" />
       <input ref={fileInputRef} type="file" className="hidden" accept="audio/*" multiple onChange={handleFile} />
+      <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
       <div className="fixed inset-0 pointer-events-none opacity-25 z-0">
         <div className="absolute inset-0 animate-tie-dye" style={bgStyle} />
@@ -151,7 +198,7 @@ export default function Home() {
               <Disc className="absolute inset-0 m-auto text-white" size={36} />
             </div>
             <h1 className="text-4xl sm:text-6xl font-black tracking-tighter text-white text-center">NEON SKY</h1>
-            <p className="text-fuchsia-300/60 font-mono tracking-widest text-[10px] sm:text-xs mt-2 uppercase text-center">Audio Mastering VM v3.5</p>
+            <p className="text-fuchsia-300/60 font-mono tracking-widest text-[10px] sm:text-xs mt-2 uppercase text-center">Mastering Suite v4</p>
           </div>
         </div>
       )}
@@ -346,22 +393,31 @@ export default function Home() {
               {/* Visualizer mode toggle */}
               <div className="flex items-center justify-center gap-2 w-full">
                 <button
-                  onClick={() => setVizMode("bars")}
+                  onClick={() => setVizMode("spectrum")}
                   className={cx(
                     "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
-                    vizMode === "bars" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
+                    vizMode === "spectrum" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
                   )}
                 >
-                  Bars
+                  Spectrum
                 </button>
                 <button
-                  onClick={() => setVizMode("wave")}
+                  onClick={() => setVizMode("oscilloscope")}
                   className={cx(
                     "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
-                    vizMode === "wave" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
+                    vizMode === "oscilloscope" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
                   )}
                 >
-                  Wave
+                  Scope
+                </button>
+                <button
+                  onClick={() => setVizMode("vectorscope")}
+                  className={cx(
+                    "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
+                    vizMode === "vectorscope" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
+                  )}
+                >
+                  Vector
                 </button>
               </div>
 
@@ -467,7 +523,129 @@ export default function Home() {
               <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-12">
                 <div className="lg:col-span-4 flex flex-col gap-6 sm:gap-10">
                   <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
+                    <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Metering</label>
+                    <div className="grid grid-cols-2 gap-3 text-[10px] sm:text-xs text-white/70">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">Peak</span>
+                        <span className="text-cyan-200 font-semibold">{formatDb(toDb(meter.peak))} dB</span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">RMS</span>
+                        <span className="text-cyan-200 font-semibold">{formatDb(toDb(meter.rms))} dB</span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS M</span>
+                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsMomentary)} LU</span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS S</span>
+                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsShort)} LU</span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS I</span>
+                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsIntegrated)} LU</span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-white/40 uppercase tracking-[0.2em]">Corr</span>
+                        <span className="text-cyan-200 font-semibold">{meter.correlation.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-400"
+                        style={{ width: `${clampValue((meter.correlation + 1) * 50, 0, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
+                    <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Presets</label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => recallPresetSlot("A")}
+                        className={cx(
+                          "flex-1 py-2 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition",
+                          activePresetSlot === "A" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                        )}
+                      >
+                        A {presetA ? "●" : ""}
+                      </button>
+                      <button
+                        onClick={() => recallPresetSlot("B")}
+                        className={cx(
+                          "flex-1 py-2 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition",
+                          activePresetSlot === "B" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                        )}
+                      >
+                        B {presetB ? "●" : ""}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => storePresetSlot("A")}
+                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                      >
+                        Store A
+                      </button>
+                      <button
+                        onClick={() => storePresetSlot("B")}
+                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                      >
+                        Store B
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={exportPresetJson}
+                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                      >
+                        Save JSON
+                      </button>
+                      <button
+                        onClick={() => presetInputRef.current?.click()}
+                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                      >
+                        Load JSON
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => setGainMatchEnabled(!gainMatchEnabled)}
+                      className={cx(
+                        "w-full py-2 rounded-xl border text-[9px] tracking-[0.25em] uppercase transition",
+                        gainMatchEnabled ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                      )}
+                    >
+                      Gain Match {gainMatchEnabled ? "On" : "Off"}
+                    </button>
+                  </div>
+
+                  <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
                     <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Export</label>
+                    <div className="flex items-center justify-between text-[9px] sm:text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <span>Loudness Normalize</span>
+                      <button
+                        onClick={() => setNormalizeLoudness(!normalizeLoudness)}
+                        className={cx(
+                          "px-3 py-1 rounded-full border transition",
+                          normalizeLoudness ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                        )}
+                      >
+                        {normalizeLoudness ? "On" : "Off"}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[9px] sm:text-[10px] text-white/40 uppercase tracking-[0.2em]">Target</span>
+                      <input
+                        type="range"
+                        min={-20}
+                        max={-6}
+                        step={0.5}
+                        value={targetLufs}
+                        onChange={(e) => setTargetLufs(parseFloat(e.target.value))}
+                        className="flex-1 accent-cyan-500"
+                      />
+                      <span className="text-[9px] sm:text-[10px] text-white/70 w-12 text-right">{targetLufs} LUFS</span>
+                    </div>
                     <button
                       disabled={!canExport || isExporting}
                       onClick={startExport}
@@ -484,7 +662,7 @@ export default function Home() {
                 <div className="lg:col-span-8 flex flex-col gap-6 sm:gap-8">
                   <div className="relative bg-black rounded-2xl sm:rounded-[3rem] border border-white/10 p-5 sm:p-10 shadow-2xl overflow-hidden min-h-[300px] sm:min-h-[350px]">
                     <div className="flex justify-between items-center mb-4 sm:mb-8">
-                      <span className="text-[9px] sm:text-[10px] font-black tracking-[0.3em] sm:tracking-[0.4em] text-white/30 uppercase">Graph EQ</span>
+                      <span className="text-[9px] sm:text-[10px] font-black tracking-[0.3em] sm:tracking-[0.4em] text-white/30 uppercase">Parametric EQ</span>
                       <button
                         onClick={resetEq}
                         className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-[9px] sm:text-[10px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
@@ -553,6 +731,267 @@ export default function Home() {
                       ))}
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Compressor</span>
+                        <button
+                          onClick={() => setCompressor((prev) => ({ ...prev, bypass: !prev.bypass }))}
+                          className={cx(
+                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
+                            compressor.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                          )}
+                        >
+                          {compressor.bypass ? "Bypass" : "Active"}
+                        </button>
+                      </div>
+                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                        <label className="flex items-center justify-between gap-3">
+                          Threshold <span className="text-cyan-200">{compressor.threshold} dB</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-40}
+                          max={0}
+                          step={1}
+                          value={compressor.threshold}
+                          onChange={(e) => setCompressor((prev) => ({ ...prev, threshold: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Ratio <span className="text-cyan-200">{compressor.ratio.toFixed(1)}:1</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={8}
+                          step={0.1}
+                          value={compressor.ratio}
+                          onChange={(e) => setCompressor((prev) => ({ ...prev, ratio: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Attack <span className="text-cyan-200">{Math.round(compressor.attack * 1000)} ms</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={200}
+                          step={1}
+                          value={compressor.attack * 1000}
+                          onChange={(e) => setCompressor((prev) => ({ ...prev, attack: parseFloat(e.target.value) / 1000 }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Release <span className="text-cyan-200">{Math.round(compressor.release * 1000)} ms</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={50}
+                          max={1000}
+                          step={10}
+                          value={compressor.release * 1000}
+                          onChange={(e) => setCompressor((prev) => ({ ...prev, release: parseFloat(e.target.value) / 1000 }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Makeup <span className="text-cyan-200">{compressor.makeup} dB</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-6}
+                          max={12}
+                          step={0.5}
+                          value={compressor.makeup}
+                          onChange={(e) => setCompressor((prev) => ({ ...prev, makeup: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Limiter</span>
+                        <button
+                          onClick={() => setLimiter((prev) => ({ ...prev, bypass: !prev.bypass }))}
+                          className={cx(
+                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
+                            limiter.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                          )}
+                        >
+                          {limiter.bypass ? "Bypass" : "Active"}
+                        </button>
+                      </div>
+                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                        <label className="flex items-center justify-between gap-3">
+                          Threshold <span className="text-cyan-200">{limiter.threshold} dB</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={0}
+                          step={0.5}
+                          value={limiter.threshold}
+                          onChange={(e) => setLimiter((prev) => ({ ...prev, threshold: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Ceiling <span className="text-cyan-200">{limiter.ceiling} dB</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-1}
+                          max={0}
+                          step={0.1}
+                          value={limiter.ceiling}
+                          onChange={(e) => setLimiter((prev) => ({ ...prev, ceiling: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Release <span className="text-cyan-200">{limiter.release} ms</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={20}
+                          max={800}
+                          step={10}
+                          value={limiter.release}
+                          onChange={(e) => setLimiter((prev) => ({ ...prev, release: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <button
+                          onClick={() => setLimiter((prev) => ({ ...prev, softClip: !prev.softClip }))}
+                          className={cx(
+                            "w-full py-2 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition",
+                            limiter.softClip ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                          )}
+                        >
+                          Soft Clip {limiter.softClip ? "On" : "Off"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Saturation</span>
+                        <button
+                          onClick={() => setSaturation((prev) => ({ ...prev, bypass: !prev.bypass }))}
+                          className={cx(
+                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
+                            saturation.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                          )}
+                        >
+                          {saturation.bypass ? "Bypass" : "Active"}
+                        </button>
+                      </div>
+                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                        <label className="flex items-center justify-between gap-3">
+                          Drive <span className="text-cyan-200">{Math.round(saturation.drive * 100)}%</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={saturation.drive}
+                          onChange={(e) => setSaturation((prev) => ({ ...prev, drive: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Mix <span className="text-cyan-200">{Math.round(saturation.mix * 100)}%</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={saturation.mix}
+                          onChange={(e) => setSaturation((prev) => ({ ...prev, mix: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Stereo Tools</span>
+                        <button
+                          onClick={() => setStereo((prev) => ({ ...prev, bypass: !prev.bypass }))}
+                          className={cx(
+                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
+                            stereo.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                          )}
+                        >
+                          {stereo.bypass ? "Bypass" : "Active"}
+                        </button>
+                      </div>
+                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                        <label className="flex items-center justify-between gap-3">
+                          Width <span className="text-cyan-200">{stereo.width.toFixed(2)}x</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={0.01}
+                          value={stereo.width}
+                          onChange={(e) => setStereo((prev) => ({ ...prev, width: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <label className="flex items-center justify-between gap-3">
+                          Pan <span className="text-cyan-200">{stereo.pan.toFixed(2)}</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-1}
+                          max={1}
+                          step={0.01}
+                          value={stereo.pan}
+                          onChange={(e) => setStereo((prev) => ({ ...prev, pan: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                        <button
+                          onClick={() => setStereo((prev) => ({ ...prev, mono: !prev.mono }))}
+                          className={cx(
+                            "w-full py-2 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition",
+                            stereo.mono ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                          )}
+                        >
+                          Mono {stereo.mono ? "On" : "Off"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4 xl:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Output</span>
+                        <button
+                          onClick={() => setOutput((prev) => ({ ...prev, bypass: !prev.bypass }))}
+                          className={cx(
+                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
+                            output.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                          )}
+                        >
+                          {output.bypass ? "Bypass" : "Active"}
+                        </button>
+                      </div>
+                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                        <label className="flex items-center justify-between gap-3">
+                          Trim <span className="text-cyan-200">{output.trim} dB</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={12}
+                          step={0.5}
+                          value={output.trim}
+                          onChange={(e) => setOutput((prev) => ({ ...prev, trim: parseFloat(e.target.value) }))}
+                          className="w-full accent-cyan-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -567,7 +1006,7 @@ export default function Home() {
               </div>
               <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-center">
                 <span className="text-zinc-600 italic hidden sm:inline">"Sound is survival"</span>
-                <span>Core v3.5</span>
+                <span>Core v4</span>
               </div>
             </footer>
           </div>
