@@ -1219,7 +1219,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
       setError(`Failed to initialize audio: ${message}`);
       return false;
     }
-  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive]);
+  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive, volume]);
 
   useEffect(() => {
     const audioEl = audioRef.current;
