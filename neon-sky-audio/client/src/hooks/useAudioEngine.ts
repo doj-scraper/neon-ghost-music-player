@@ -737,7 +737,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
       setError(`Failed to initialize audio: ${message}`);
       return false;
     }
-  }, [ensureAudioCtxResumed, startVisualizer, track.title, visualizerActive, volume]);
+  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive, volume]);
 
   useEffect(() => {
     const audioEl = audioRef.current;
