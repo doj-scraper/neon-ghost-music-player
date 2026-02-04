@@ -16,23 +16,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
+  ChevronLeft,
+  ChevronRight,
   Disc,
   Download,
+  ImagePlus,
   ListMusic,
   Music,
   Pause,
   Play,
+  Plus,
+  Search,
   Settings,
   SkipBack,
   SkipForward,
   Terminal,
+  Trash2,
   Upload,
   Volume2,
   VolumeX,
   X,
   Zap,
 } from "lucide-react";
-import { useAudioEngine, type Band, type Phase } from "../hooks/useAudioEngine";
+import { useAudioEngine, type Band, type Phase, type VizMode } from "../hooks/useAudioEngine";
 
 const NEON = {
   hex: "#bc13fe", // cyberpunk purple
@@ -48,6 +54,18 @@ const formatTime = (s: number) => {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 };
 
+const formatDuration = (s: number) => {
+  if (!Number.isFinite(s) || s <= 0) return "0:00";
+  const total = Math.floor(s);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${sec.toString().padStart(2, "0")}`;
+};
+
 const formatDb = (value: number, digits = 1) => {
   if (!Number.isFinite(value) || value <= -120) return "--";
   return value.toFixed(digits);
@@ -61,7 +79,10 @@ export default function Home() {
   const [phase, setPhase] = useState<Phase>("splash");
   const [suiteOpen, setSuiteOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [queueSearch, setQueueSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const presetInputRef = useRef<HTMLInputElement | null>(null);
+  const addFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
     vizMode,
@@ -113,6 +134,9 @@ export default function Home() {
     onGraphMouseDown,
     onGraphTouchStart,
     onGraphTouchMove,
+    updatePlaylistItem,
+    updatePlaylistArtwork,
+    removePlaylistItems,
     presetA,
     presetB,
     activePresetSlot,
@@ -131,7 +155,7 @@ export default function Home() {
     recallPresetSlot,
     exportPresetJson,
     importPresetJson,
-  } = useAudioEngine({ visualizerColor: NEON.rgba, visualizerActive: phase === "player" });
+  } = useAudioEngine({ visualizerColor: NEON.rgba, visualizerActive: phase === "player", visualizerPulse: true });
 
   // -------- Phase timing --------
   useEffect(() => {
@@ -156,6 +180,10 @@ export default function Home() {
     }
   };
 
+  useEffect(() => {
+    setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => playlist.some((item) => item.id === id))));
+  }, [playlist]);
+
   // -------- Styles --------
   const bgStyle = useMemo(
     () => ({
@@ -165,12 +193,61 @@ export default function Home() {
     []
   );
 
+  const vizModes: VizMode[] = ["spectrum", "oscilloscope", "vectorscope"];
+  const vizIndex = Math.max(0, vizModes.indexOf(vizMode));
+  const handleVizPrev = () => setVizMode(vizModes[(vizIndex - 1 + vizModes.length) % vizModes.length]);
+  const handleVizNext = () => setVizMode(vizModes[(vizIndex + 1) % vizModes.length]);
+
+  const filteredPlaylist = useMemo(() => {
+    const query = queueSearch.trim().toLowerCase();
+    if (!query) return playlist;
+    return playlist.filter((item) => {
+      const haystack = `${item.title} ${item.artist} ${item.album} ${item.extension}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [playlist, queueSearch]);
+
+  const totalDuration = useMemo(() => playlist.reduce((sum, item) => sum + (item.duration || 0), 0), [playlist]);
+
+  const scrubHandle = useMemo(() => {
+    const angle = (progressPct / 100) * Math.PI * 2 - Math.PI / 2;
+    const radius = 50;
+    return {
+      cx: 60 + Math.cos(angle) * radius,
+      cy: 60 + Math.sin(angle) * radius,
+    };
+  }, [progressPct]);
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const allSelected = playlist.length > 0 && selectedIds.size === playlist.length;
+
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(playlist.map((item) => item.id)));
+  };
+
+  const handleRemoveSelected = () => {
+    removePlaylistItems(Array.from(selectedIds));
+    setSelectedIds(new Set());
+  };
+
   // -------- Render --------
   return (
     <div className="min-h-screen min-h-[100dvh] bg-black text-white font-mono selection:bg-cyan-500 selection:text-black relative overflow-hidden">
       {/* Persistent elements (never unmount) */}
       <audio ref={audioRef} className="hidden" playsInline crossOrigin="anonymous" />
-      <input ref={fileInputRef} type="file" className="hidden" multiple onChange={handleFile} />
+      <input ref={fileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFile(e, "replace")} />
+      <input ref={addFileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFile(e, "append")} />
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
       <div className="fixed inset-0 pointer-events-none opacity-25 z-0">
@@ -236,7 +313,7 @@ export default function Home() {
       {phase === "player" && (
         <>
           <main className="relative z-10 flex flex-col items-center justify-center min-h-screen min-h-[100dvh] p-3 sm:p-6">
-            <div className="w-full max-w-[340px] sm:max-w-sm bg-zinc-900/60 backdrop-blur-3xl border border-white/10 rounded-[2rem] sm:rounded-[3rem] p-5 sm:p-8 shadow-2xl flex flex-col items-center gap-4 sm:gap-5">
+            <div className="w-full max-w-[340px] sm:max-w-sm bg-zinc-900/60 backdrop-blur-3xl border border-white/10 ring-2 ring-black rounded-[2rem] sm:rounded-[3rem] p-5 sm:p-8 shadow-2xl flex flex-col items-center gap-4 sm:gap-5">
               
               {/* Artwork Display */}
               <div className="relative w-28 h-28 sm:w-36 sm:h-36 rounded-2xl overflow-hidden bg-zinc-800/50 border border-white/10 flex items-center justify-center flex-shrink-0">
@@ -268,6 +345,25 @@ export default function Home() {
               <div className="relative w-full h-20 sm:h-28 flex items-center justify-center">
                 <canvas ref={vizCanvasRef} className="absolute inset-0 w-full h-full rounded-xl opacity-80" />
                 <div className={cx("absolute inset-0 rounded-xl border border-white/10", isPlaying && "animate-pulse")} />
+                <div className="absolute right-2 top-2 flex items-center gap-1 bg-black/40 border border-white/10 rounded-full px-1 py-1 backdrop-blur">
+                  <button
+                    onClick={handleVizPrev}
+                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+                    aria-label="Previous visualizer mode"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    onClick={handleVizNext}
+                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+                    aria-label="Next visualizer mode"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+                <div className="absolute left-2 bottom-2 text-[9px] text-white/50 uppercase tracking-[0.3em]">
+                  {vizMode}
+                </div>
               </div>
 
               {/* Transport + Circular progress (touch to seek) */}
@@ -298,14 +394,33 @@ export default function Home() {
                   )}
                   aria-label="Seek ring"
                 >
+                  <div className="absolute inset-2 rounded-full bg-gradient-to-br from-amber-200/20 via-amber-500/10 to-amber-900/40 shadow-[inset_0_2px_10px_rgba(255,255,255,0.25),inset_0_-8px_14px_rgba(0,0,0,0.6),0_10px_18px_rgba(0,0,0,0.45)]" />
                   <svg className="absolute inset-0" viewBox="0 0 120 120">
-                    <circle cx="60" cy="60" r="50" stroke="rgba(255,255,255,0.12)" strokeWidth="8" fill="none" />
+                    <defs>
+                      <linearGradient id="scrub-track" x1="0" x2="1" y1="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(255,214,170,0.2)" />
+                        <stop offset="100%" stopColor="rgba(255,120,90,0.45)" />
+                      </linearGradient>
+                      <linearGradient id="scrub-progress" x1="0" x2="1" y1="1" y2="0">
+                        <stop offset="0%" stopColor="rgba(255,159,67,0.95)" />
+                        <stop offset="100%" stopColor="rgba(255,204,102,0.95)" />
+                      </linearGradient>
+                      <radialGradient id="scrub-handle" cx="30%" cy="30%" r="70%">
+                        <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
+                        <stop offset="60%" stopColor="rgba(255,191,115,0.95)" />
+                        <stop offset="100%" stopColor="rgba(178,88,20,0.95)" />
+                      </radialGradient>
+                      <filter id="scrub-shadow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="rgba(0,0,0,0.7)" />
+                      </filter>
+                    </defs>
+                    <circle cx="60" cy="60" r="50" stroke="url(#scrub-track)" strokeWidth="9" fill="none" />
                     <circle
                       cx="60"
                       cy="60"
                       r="50"
-                      stroke={`rgba(${NEON.rgba},0.9)`}
-                      strokeWidth="8"
+                      stroke="url(#scrub-progress)"
+                      strokeWidth="9"
                       strokeLinecap="round"
                       fill="none"
                       strokeDasharray={`${Math.PI * 2 * 50}`}
@@ -313,6 +428,17 @@ export default function Home() {
                       style={{ transition: isDragging ? "none" : "stroke-dashoffset 120ms linear" }}
                       transform="rotate(-90 60 60)"
                     />
+                    {track.duration > 0 && (
+                      <circle
+                        cx={scrubHandle.cx}
+                        cy={scrubHandle.cy}
+                        r="6.5"
+                        fill="url(#scrub-handle)"
+                        stroke="rgba(255,255,255,0.6)"
+                        strokeWidth="1"
+                        filter="url(#scrub-shadow)"
+                      />
+                    )}
                   </svg>
 
                   <button
@@ -320,7 +446,9 @@ export default function Home() {
                     disabled={!canPlay}
                     className={cx(
                       "absolute inset-3 rounded-full flex items-center justify-center transition-all shadow-2xl active:scale-90",
-                      canPlay ? "bg-white text-black hover:scale-105" : "bg-white/20 text-white/60 cursor-not-allowed"
+                      canPlay
+                        ? "bg-gradient-to-br from-white via-amber-50 to-amber-200 text-black hover:scale-105 shadow-[0_6px_18px_rgba(255,200,120,0.35)]"
+                        : "bg-white/20 text-white/60 cursor-not-allowed"
                     )}
                     aria-label={isPlaying ? "Pause" : "Play"}
                   >
@@ -390,37 +518,6 @@ export default function Home() {
                 </span>
               </div>
 
-              {/* Visualizer mode toggle */}
-              <div className="flex items-center justify-center gap-2 w-full">
-                <button
-                  onClick={() => setVizMode("spectrum")}
-                  className={cx(
-                    "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
-                    vizMode === "spectrum" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  Spectrum
-                </button>
-                <button
-                  onClick={() => setVizMode("oscilloscope")}
-                  className={cx(
-                    "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
-                    vizMode === "oscilloscope" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  Scope
-                </button>
-                <button
-                  onClick={() => setVizMode("vectorscope")}
-                  className={cx(
-                    "flex-1 py-2 sm:py-2 rounded-xl text-[9px] sm:text-[10px] font-bold border transition tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95",
-                    vizMode === "vectorscope" ? "border-cyan-500/50 text-cyan-300 bg-cyan-500/10" : "border-white/10 text-white/40 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  Vector
-                </button>
-              </div>
-
               {/* Action buttons */}
               <div className="w-full">
                 <div className="flex gap-3 sm:gap-4">
@@ -470,33 +567,151 @@ export default function Home() {
                   </button>
                 </div>
 
+                <div className="px-5 py-3 border-b border-white/10 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={14} />
+                      <input
+                        value={queueSearch}
+                        onChange={(e) => setQueueSearch(e.target.value)}
+                        placeholder="Search title, artist, album, type..."
+                        className="w-full rounded-xl bg-white/5 border border-white/10 pl-9 pr-3 py-2 text-xs text-white/80 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                      />
+                    </div>
+                    <button
+                      onClick={() => addFileInputRef.current?.click()}
+                      className="h-9 px-3 rounded-xl bg-white/5 border border-white/10 text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 hover:bg-white/10 transition"
+                    >
+                      <Plus size={12} /> Add
+                    </button>
+                    <button
+                      onClick={handleRemoveSelected}
+                      disabled={selectedIds.size === 0}
+                      className={cx(
+                        "h-9 px-3 rounded-xl border text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 transition",
+                        selectedIds.size
+                          ? "bg-red-500/20 border-red-500/30 text-red-200 hover:bg-red-500/30"
+                          : "bg-white/5 border-white/10 text-white/30 cursor-not-allowed"
+                      )}
+                    >
+                      <Trash2 size={12} /> Remove
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                    <button onClick={toggleSelectAll} className="flex items-center gap-2 hover:text-white/70 transition">
+                      <span className={cx("w-2 h-2 rounded-full", allSelected ? "bg-cyan-400" : "bg-white/20")} />
+                      {allSelected ? "Clear selection" : "Select all"}
+                    </button>
+                    <div className="flex items-center gap-4">
+                      <span>{playlist.length} tracks</span>
+                      <span>Total {formatDuration(totalDuration)}</span>
+                      <span>{selectedIds.size} selected</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="max-h-[60vh] overflow-y-auto">
                   {playlist.length === 0 ? (
                     <div className="p-6 text-xs text-white/50">No tracks loaded.</div>
                   ) : (
                     <div className="divide-y divide-white/5">
-                      {playlist.map((it, i) => (
-                        <button
-                          key={it.id}
-                          onClick={() => {
-                            setQueueOpen(false);
-                            void loadTrackAt(i, { autoplay: true });
-                          }}
-                          className={cx(
-                            "w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-white/5 transition",
-                            i === currentIndex && "bg-white/5"
-                          )}
-                        >
-                          <div className={cx("w-2 h-2 rounded-full", i === currentIndex ? "bg-cyan-400" : "bg-white/15")} />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold truncate">{it.title}</div>
-                            <div className="text-[10px] text-white/40 tracking-[0.2em] uppercase truncate">{it.artist || "Unknown"}</div>
+                      {filteredPlaylist.map((it) => {
+                        const playlistIndex = playlist.findIndex((entry) => entry.id === it.id);
+                        return (
+                          <div
+                            key={it.id}
+                            className={cx(
+                              "w-full text-left px-5 py-4 flex items-start gap-3 hover:bg-white/5 transition",
+                              playlistIndex === currentIndex && "bg-white/5"
+                            )}
+                          >
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(it.id)}
+                            onChange={() => toggleSelected(it.id)}
+                            className="mt-1 h-4 w-4 rounded border border-white/20 bg-white/5 accent-cyan-500"
+                            aria-label={`Select ${it.title}`}
+                          />
+                          <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center flex-shrink-0">
+                            {it.artwork ? (
+                              <img src={it.artwork} alt={`${it.title} artwork`} className="w-full h-full object-cover" />
+                            ) : (
+                              <Music size={16} className="text-white/30" />
+                            )}
+                            {it.extension && (
+                              <div className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[8px] uppercase text-white/60">
+                                {it.extension}
+                              </div>
+                            )}
                           </div>
-                          <div className="text-[10px] text-white/30 tracking-[0.25em] uppercase">
-                            {i + 1}
+                          <div className="flex-1 min-w-0 space-y-2">
+                            <input
+                              value={it.title}
+                              onChange={(e) => updatePlaylistItem(it.id, { title: e.target.value })}
+                              className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-xs text-white/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                              placeholder="Track title"
+                            />
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                value={it.artist}
+                                onChange={(e) => updatePlaylistItem(it.id, { artist: e.target.value })}
+                                className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                                placeholder="Artist"
+                              />
+                              <input
+                                value={it.album}
+                                onChange={(e) => updatePlaylistItem(it.id, { album: e.target.value })}
+                                className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                                placeholder="Album"
+                              />
+                            </div>
+                            <div className="flex items-center gap-3 text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                              <span>{formatDuration(it.duration)}</span>
+                              <span>#{playlistIndex + 1}</span>
+                            </div>
                           </div>
-                        </button>
-                      ))}
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => {
+                                setQueueOpen(false);
+                                void loadTrackAt(playlistIndex, { autoplay: true });
+                              }}
+                              className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition"
+                              aria-label={`Play ${it.title}`}
+                            >
+                              <Play size={12} />
+                            </button>
+                            <label className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition cursor-pointer">
+                              <ImagePlus size={12} />
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  if (file) updatePlaylistArtwork(it.id, file);
+                                  event.target.value = "";
+                                }}
+                              />
+                            </label>
+                            <button
+                              onClick={() => {
+                                setSelectedIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(it.id);
+                                  return next;
+                                });
+                                removePlaylistItems([it.id]);
+                              }}
+                              className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition text-red-200"
+                              aria-label={`Remove ${it.title}`}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
