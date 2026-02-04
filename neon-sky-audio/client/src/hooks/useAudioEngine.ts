@@ -659,6 +659,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const previousVolumeRef = useRef(1);
   const isInitializedRef = useRef(false);
   const playbackStateRef = useRef<PlaybackState>("idle");
+  const setPlayback = useCallback((next: PlaybackState) => {
+    playbackStateRef.current = next;
+    setPlaybackState(next);
+  }, []);
   const lastWasPlayingRef = useRef(false);
   const visualizerToastRef = useRef(false);
   const resumeStateRef = useRef<ResumeState | null>(null);
@@ -774,11 +778,6 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         console.warn("Failed to resume AudioContext:", err);
       }
     }
-  }, []);
-
-  const setPlayback = useCallback((next: PlaybackState) => {
-    playbackStateRef.current = next;
-    setPlaybackState(next);
   }, []);
 
   // Initialize visualizer loop once
