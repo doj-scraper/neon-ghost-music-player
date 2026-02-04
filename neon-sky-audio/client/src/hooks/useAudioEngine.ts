@@ -269,6 +269,210 @@ const applyGainToBuffer = (buffer: AudioBuffer, gain: number) => {
   }
 };
 
+// Stable RAF loop utility
+class StableVisualizerLoop {
+  private rafId: number | null = null;
+  private isRunning = false;
+  private canvas: HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
+  private analyser: AnalyserNode | null = null;
+  private vizAnalyserL: AnalyserNode | null = null;
+  private vizAnalyserR: AnalyserNode | null = null;
+  private vizMode: VizMode = "spectrum";
+  private visualizerColor: string;
+  private visualizerPulse: boolean;
+  private dpr: number;
+  private frameCount = 0;
+  private lastFrameTime = 0;
+  private targetFps = 60;
+  private frameInterval = 1000 / 60;
+
+  constructor(
+    visualizerColor: string,
+    visualizerPulse: boolean
+  ) {
+    this.visualizerColor = visualizerColor;
+    this.visualizerPulse = visualizerPulse;
+    this.dpr = window.devicePixelRatio || 1;
+  }
+
+  setCanvas(canvas: HTMLCanvasElement | null) {
+    if (this.canvas === canvas) return;
+    this.canvas = canvas;
+    if (canvas) {
+      this.ctx = canvas.getContext("2d", { alpha: true, desynchronized: true }) || null;
+      this.resize();
+    } else {
+      this.ctx = null;
+    }
+  }
+
+  setAnalysers(
+    analyser: AnalyserNode | null,
+    vizL: AnalyserNode | null,
+    vizR: AnalyserNode | null
+  ) {
+    this.analyser = analyser;
+    this.vizAnalyserL = vizL;
+    this.vizAnalyserR = vizR;
+  }
+
+  setVizMode(mode: VizMode) {
+    this.vizMode = mode;
+  }
+
+  setColor(color: string) {
+    this.visualizerColor = color;
+  }
+
+  resize() {
+    if (!this.canvas) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width * this.dpr));
+    const height = Math.max(1, Math.floor(rect.height * this.dpr));
+    
+    // Only resize if dimensions changed significantly
+    if (Math.abs(this.canvas.width - width) > 1 || Math.abs(this.canvas.height - height) > 1) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+  }
+
+  start() {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    this.lastFrameTime = performance.now();
+    this.loop();
+  }
+
+  stop() {
+    this.isRunning = false;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+  }
+
+  private loop = () => {
+    if (!this.isRunning) return;
+
+    const now = performance.now();
+    const elapsed = now - this.lastFrameTime;
+
+    // Frame rate limiting for stability
+    if (elapsed < this.frameInterval) {
+      this.rafId = requestAnimationFrame(this.loop);
+      return;
+    }
+
+    this.lastFrameTime = now - (elapsed % this.frameInterval);
+    this.frameCount++;
+
+    this.render();
+
+    this.rafId = requestAnimationFrame(this.loop);
+  };
+
+  private render() {
+    if (!this.ctx || !this.canvas) return;
+
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w === 0 || h === 0) return;
+
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!this.analyser) return;
+
+    const len = this.analyser.frequencyBinCount;
+    const data = new Uint8Array(len);
+    const now = performance.now() / 1000;
+    const pulseColor = this.visualizerPulse
+      ? hslToRgb(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1))
+      : null;
+    const getColor = (alpha: number) =>
+      pulseColor
+        ? `rgba(${pulseColor.r},${pulseColor.g},${pulseColor.b},${alpha})`
+        : `rgba(${this.visualizerColor},${alpha})`;
+
+    try {
+      if (this.vizMode === "spectrum") {
+        this.analyser.getByteFrequencyData(data);
+        const barCount = Math.max(24, Math.floor(w / (10 * this.dpr)));
+        const minFreq = 20;
+        const maxFreq = 20000;
+        const logMin = Math.log10(minFreq);
+        const logMax = Math.log10(maxFreq);
+
+        const barWidth = w / barCount;
+        for (let i = 0; i < barCount; i += 1) {
+          const t = i / (barCount - 1);
+          const freq = Math.pow(10, logMin + t * (logMax - logMin));
+          const idx = Math.min(len - 1, Math.floor((freq / maxFreq) * len));
+          const amp = data[idx] / 255;
+          const barHeight = amp * h * 0.9;
+          const alpha = Math.max(0.2, amp);
+          ctx.fillStyle = getColor(alpha);
+          const x = i * barWidth + 1;
+          const y = h - barHeight;
+          const bw = Math.max(1, barWidth - 2);
+          ctx.fillRect(x, y, bw, barHeight);
+        }
+      } else if (this.vizMode === "oscilloscope") {
+        this.analyser.getByteTimeDomainData(data);
+
+        ctx.beginPath();
+        ctx.strokeStyle = getColor(0.95);
+        ctx.lineWidth = Math.max(1, Math.floor(w / 450));
+
+        const slice = w / len;
+        let x = 0;
+        for (let i = 0; i < len; i += 1) {
+          const v = data[i] / 128 - 1;
+          const y = h / 2 + v * (h * 0.35);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+          x += slice;
+        }
+        ctx.stroke();
+      } else if (this.vizMode === "vectorscope") {
+        const analyserL = this.vizAnalyserL;
+        const analyserR = this.vizAnalyserR;
+        if (!analyserL || !analyserR) return;
+        const dataL = new Uint8Array(analyserL.fftSize);
+        const dataR = new Uint8Array(analyserR.fftSize);
+        analyserL.getByteTimeDomainData(dataL);
+        analyserR.getByteTimeDomainData(dataR);
+
+        ctx.beginPath();
+        ctx.strokeStyle = getColor(0.95);
+        ctx.lineWidth = Math.max(1, Math.floor(w / 500));
+
+        for (let i = 0; i < dataL.length; i += 1) {
+          const x = ((dataL[i] / 128 - 1) * 0.45 + 0.5) * w;
+          const y = ((dataR[i] / 128 - 1) * 0.45 + 0.5) * h;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    } catch (err) {
+      // Silently handle render errors to prevent crash loops
+      console.warn("Visualizer render error:", err);
+    }
+  }
+
+  destroy() {
+    this.stop();
+    this.canvas = null;
+    this.ctx = null;
+    this.analyser = null;
+    this.vizAnalyserL = null;
+    this.vizAnalyserR = null;
+  }
+}
+
 export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPulse = false }: AudioEngineOptions) => {
   const [vizMode, setVizMode] = useState<VizMode>("spectrum");
   const [isLoading, setIsLoading] = useState(false);
@@ -339,6 +543,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const [targetLufs, setTargetLufs] = useState(-14);
 
   const previousVolumeRef = useRef(1);
+  const isInitializedRef = useRef(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -373,7 +578,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const destRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<BlobPart[]>([]);
-  const rafRef = useRef<number | null>(null);
+
+  // Stable visualizer instance
+  const visualizerRef = useRef<StableVisualizerLoop | null>(null);
 
   const ensureAudioCtxResumed = useCallback(async () => {
     if (audioCtxRef.current?.state === "suspended") {
@@ -385,112 +592,43 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     }
   }, []);
 
+  // Initialize visualizer loop once
+  useEffect(() => {
+    visualizerRef.current = new StableVisualizerLoop(visualizerColor, visualizerPulse);
+    return () => {
+      visualizerRef.current?.destroy();
+      visualizerRef.current = null;
+    };
+  }, [visualizerColor, visualizerPulse]);
+
+  // Update visualizer refs when they change
+  useEffect(() => {
+    visualizerRef.current?.setCanvas(vizCanvasRef.current);
+  }, []);
+
+  useEffect(() => {
+    visualizerRef.current?.setAnalysers(
+      analyserRef.current,
+      vizAnalyserLRef.current,
+      vizAnalyserRRef.current
+    );
+  }, []);
+
+  useEffect(() => {
+    visualizerRef.current?.setVizMode(vizMode);
+  }, [vizMode]);
+
   const resizeCanvas = useCallback(() => {
-    const canvas = vizCanvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
+    visualizerRef.current?.resize();
   }, []);
 
   const stopVisualizer = useCallback(() => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    visualizerRef.current?.stop();
   }, []);
 
   const startVisualizer = useCallback(() => {
-    stopVisualizer();
-
-    const loop = () => {
-      rafRef.current = requestAnimationFrame(loop);
-      const analyser = analyserRef.current;
-      const canvas = vizCanvasRef.current;
-      if (!canvas) return;
-
-      resizeCanvas();
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      const w = canvas.width;
-      const h = canvas.height;
-      if (w === 0 || h === 0) return;
-
-      ctx.clearRect(0, 0, w, h);
-
-      if (!analyser) return;
-      const len = analyser.frequencyBinCount;
-      const data = new Uint8Array(len);
-      const now = performance.now() / 1000;
-      const pulseColor = visualizerPulse ? hslToRgb(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1)) : null;
-      const getColor = (alpha: number) =>
-        pulseColor ? `rgba(${pulseColor.r},${pulseColor.g},${pulseColor.b},${alpha})` : `rgba(${visualizerColor},${alpha})`;
-
-      if (vizMode === "spectrum") {
-        analyser.getByteFrequencyData(data);
-        const barCount = Math.max(24, Math.floor(w / 10));
-        const minFreq = 20;
-        const maxFreq = (audioCtxRef.current?.sampleRate ?? 44100) / 2;
-        const logMin = Math.log10(minFreq);
-        const logMax = Math.log10(maxFreq);
-
-        const barWidth = w / barCount;
-        for (let i = 0; i < barCount; i += 1) {
-          const t = i / (barCount - 1);
-          const freq = Math.pow(10, logMin + t * (logMax - logMin));
-          const idx = Math.min(len - 1, Math.floor((freq / maxFreq) * len));
-          const amp = data[idx] / 255;
-          const barHeight = amp * h;
-          const alpha = Math.max(0.2, amp);
-          ctx.fillStyle = getColor(alpha);
-          ctx.fillRect(i * barWidth + 1, h - barHeight, Math.max(1, barWidth - 2), barHeight);
-        }
-      } else if (vizMode === "oscilloscope") {
-        analyser.getByteTimeDomainData(data);
-
-        ctx.beginPath();
-        ctx.strokeStyle = getColor(0.95);
-        ctx.lineWidth = Math.max(1, Math.floor(w / 450));
-
-        const slice = w / len;
-        let x = 0;
-        for (let i = 0; i < len; i += 1) {
-          const v = data[i] / 128 - 1;
-          const y = h / 2 + v * (h * 0.35);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-          x += slice;
-        }
-        ctx.stroke();
-      } else {
-        const analyserL = vizAnalyserLRef.current;
-        const analyserR = vizAnalyserRRef.current;
-        if (!analyserL || !analyserR) return;
-        const dataL = new Uint8Array(analyserL.fftSize);
-        const dataR = new Uint8Array(analyserR.fftSize);
-        analyserL.getByteTimeDomainData(dataL);
-        analyserR.getByteTimeDomainData(dataR);
-
-        ctx.beginPath();
-        ctx.strokeStyle = getColor(0.95);
-        ctx.lineWidth = Math.max(1, Math.floor(w / 500));
-
-        for (let i = 0; i < dataL.length; i += 1) {
-          const x = ((dataL[i] / 128 - 1) * 0.45 + 0.5) * w;
-          const y = ((dataR[i] / 128 - 1) * 0.45 + 0.5) * h;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-    };
-
-    loop();
-  }, [resizeCanvas, stopVisualizer, visualizerColor, visualizerPulse, vizMode]);
+    visualizerRef.current?.start();
+  }, []);
 
   const applyBandGain = useCallback((band: Band, gainDb: number) => {
     const g = clamp(gainDb, -24, 24);
@@ -508,7 +646,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   }, [eq.high, eq.low, eq.mid]);
 
   const resetEq = useCallback(() => {
-    (['low', 'mid', 'high'] as Band[]).forEach((band) => applyBandGain(band, 0));
+    (["low", "mid", "high"] as Band[]).forEach((band) => applyBandGain(band, 0));
   }, [applyBandGain]);
 
   const handleGraphDrag = useCallback(
@@ -635,82 +773,85 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     void playNext({ autoplay: true });
   }, [playNext]);
 
-  const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>, mode: "replace" | "append" = "replace") => {
-    const files = Array.from(e.target.files ?? []);
-    const audioEl = audioRef.current;
-    if (files.length === 0 || !audioEl) return;
+  const handleFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>, mode: "replace" | "append" = "replace") => {
+      const files = Array.from(e.target.files ?? []);
+      const audioEl = audioRef.current;
+      if (files.length === 0 || !audioEl) return;
 
-    setError(null);
-    setIsLoading(true);
+      setError(null);
+      setIsLoading(true);
 
-    const shouldReplace = mode === "replace";
-    if (shouldReplace) {
-      setIsPlaying(false);
-      setCurrentIndex(0);
-      revokePlaylistUrls(playlist);
-    }
-
-    const nextItems = await Promise.all(
-      files.map(async (file) => {
-        const url = URL.createObjectURL(file);
-
-        let title = file.name.replace(/\.[^/.]+$/, "");
-        let artist = "Unknown Artist";
-        let album = "";
-        let artwork: string | null = null;
-
-        const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-        if (dashMatch) {
-          artist = dashMatch[1].trim();
-          title = dashMatch[2].trim();
-        }
-
-        try {
-          const metadata = await parseID3Tags(file);
-          if (metadata.title) title = metadata.title;
-          if (metadata.artist) artist = metadata.artist;
-          if (metadata.album) album = metadata.album;
-          if (metadata.artwork) artwork = metadata.artwork;
-        } catch {
-          // ignore
-        }
-
-        const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-        const duration = await getAudioDuration(url);
-
-        return {
-          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-          file,
-          url,
-          title,
-          artist,
-          album,
-          artwork,
-          duration,
-          extension,
-        };
-      })
-    );
-
-    setPlaylist((prev) => {
-      const base = shouldReplace ? [] : prev;
-      return [...base, ...nextItems];
-    });
-
-    const shouldLoadFirst = shouldReplace || playlist.length === 0;
-    if (shouldLoadFirst) {
-      const first = nextItems[0];
-      if (first) {
-        audioEl.src = first.url;
-        audioEl.load();
-        setTrack(buildTrackState(first));
+      const shouldReplace = mode === "replace";
+      if (shouldReplace) {
+        setIsPlaying(false);
+        setCurrentIndex(0);
+        revokePlaylistUrls(playlist);
       }
-    } else {
-      setIsLoading(false);
-    }
 
-    e.target.value = "";
-  }, [playlist, revokePlaylistUrls]);
+      const nextItems = await Promise.all(
+        files.map(async (file) => {
+          const url = URL.createObjectURL(file);
+
+          let title = file.name.replace(/\.[^/.]+$/, "");
+          let artist = "Unknown Artist";
+          let album = "";
+          let artwork: string | null = null;
+
+          const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+          if (dashMatch) {
+            artist = dashMatch[1].trim();
+            title = dashMatch[2].trim();
+          }
+
+          try {
+            const metadata = await parseID3Tags(file);
+            if (metadata.title) title = metadata.title;
+            if (metadata.artist) artist = metadata.artist;
+            if (metadata.album) album = metadata.album;
+            if (metadata.artwork) artwork = metadata.artwork;
+          } catch {
+            // ignore
+          }
+
+          const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+          const duration = await getAudioDuration(url);
+
+          return {
+            id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+            file,
+            url,
+            title,
+            artist,
+            album,
+            artwork,
+            duration,
+            extension,
+          };
+        })
+      );
+
+      setPlaylist((prev) => {
+        const base = shouldReplace ? [] : prev;
+        return [...base, ...nextItems];
+      });
+
+      const shouldLoadFirst = shouldReplace || playlist.length === 0;
+      if (shouldLoadFirst) {
+        const first = nextItems[0];
+        if (first) {
+          audioEl.src = first.url;
+          audioEl.load();
+          setTrack(buildTrackState(first));
+        }
+      } else {
+        setIsLoading(false);
+      }
+
+      e.target.value = "";
+    },
+    [playlist, revokePlaylistUrls]
+  );
 
   const togglePlay = useCallback(async () => {
     const audioEl = audioRef.current;
@@ -1278,6 +1419,12 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   const initAudio = useCallback(async () => {
     try {
+      if (isInitializedRef.current) {
+        await ensureAudioCtxResumed();
+        if (visualizerActive) startVisualizer();
+        return true;
+      }
+
       setError(null);
 
       const audioEl = audioRef.current;
@@ -1386,6 +1533,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
             if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
           };
         }
+
+        // Update visualizer with new analysers
+        visualizerRef.current?.setAnalysers(
+          analyserRef.current,
+          vizAnalyserLRef.current,
+          vizAnalyserRRef.current
+        );
+
+        isInitializedRef.current = true;
       }
 
       await ensureAudioCtxResumed();
@@ -1396,7 +1552,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       setError(`Failed to initialize audio: ${message}`);
       return false;
     }
-  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive, volume]);
+  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive]);
 
   useEffect(() => {
     const audioEl = audioRef.current;

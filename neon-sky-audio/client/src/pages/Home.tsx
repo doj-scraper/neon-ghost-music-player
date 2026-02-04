@@ -1,11 +1,17 @@
 /**
- * NEON SKY Audio Mastering Suite v4
+ * NEON SKY Audio Mastering Suite v4.5
  * Design: Liquid Neon Glassmorphism
- * - Frosted glass surfaces with deep blur effects
+ * - Enhanced frosted glass surfaces with deep blur effects
  * - Luminous neon cyan accents that appear to glow
  * - Animated tie-dye background with continuous hue rotation
  * - Monospace typography with wide tracking
  * - Mobile-first responsive design
+ * 
+ * Stability Enhancements:
+ * - Stable visualizer loop with frame rate limiting
+ * - Proper resource cleanup
+ * - Audio context state management
+ * - Error boundary protection
  * 
  * Safari/iOS Compatibility Notes:
  * - AudioContext must be created/resumed on user gesture
@@ -37,11 +43,13 @@ import {
   VolumeX,
   X,
   Zap,
+  Activity,
+  Radio,
 } from "lucide-react";
 import { useAudioEngine, type Band, type Phase, type VizMode } from "../hooks/useAudioEngine";
 
 const NEON = {
-  hex: "#bc13fe", // cyberpunk purple
+  hex: "#bc13fe",
   rgba: "188,19,254",
 } as const;
 
@@ -73,6 +81,13 @@ const formatDb = (value: number, digits = 1) => {
 
 const toDb = (gain: number) => 20 * Math.log10(Math.max(gain, 0.000001));
 const clampValue = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+// Visualizer mode icons
+const vizModeIcons: Record<VizMode, React.ReactNode> = {
+  spectrum: <Activity size={12} />,
+  oscilloscope: <Radio size={12} />,
+  vectorscope: <Disc size={12} />,
+};
 
 export default function Home() {
   // -------- App/UI State --------
@@ -187,8 +202,10 @@ export default function Home() {
   // -------- Styles --------
   const bgStyle = useMemo(
     () => ({
-      background: `radial-gradient(circle at 50% 50%, ${NEON.hex}, #6d28d9, #ff00ff, #050505)`,
-      backgroundSize: "400% 400%",
+      background: `radial-gradient(ellipse at 30% 20%, rgba(188, 19, 254, 0.15) 0%, transparent 50%),
+                   radial-gradient(ellipse at 70% 80%, rgba(0, 240, 255, 0.1) 0%, transparent 50%),
+                   radial-gradient(circle at 50% 50%, ${NEON.hex}, #6d28d9, #1a0b2e, #050505)`,
+      backgroundSize: "200% 200%, 200% 200%, 400% 400%",
     }),
     []
   );
@@ -250,59 +267,97 @@ export default function Home() {
       <input ref={addFileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFile(e, "append")} />
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
-      <div className="fixed inset-0 pointer-events-none opacity-25 z-0">
+      {/* Animated Background */}
+      <div className="fixed inset-0 pointer-events-none opacity-40 z-0">
         <div className="absolute inset-0 animate-tie-dye" style={bgStyle} />
-        <div className="absolute inset-0 backdrop-blur-[110px]" />
+        <div className="absolute inset-0 backdrop-blur-[120px]" />
       </div>
 
+      {/* Grid Overlay */}
+      <div 
+        className="fixed inset-0 pointer-events-none z-0 opacity-[0.03]"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)
+          `,
+          backgroundSize: '50px 50px',
+        }}
+      />
+
+      {/* Error Toast */}
       {error && (
-        <div className="fixed top-4 left-4 right-4 z-[60] max-w-2xl mx-auto rounded-2xl border border-red-500/30 bg-red-500/10 backdrop-blur-xl p-3 flex items-start justify-between gap-3">
-          <div className="text-xs sm:text-sm text-red-200">{error}</div>
-          <button onClick={clearError} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition flex-shrink-0" aria-label="Dismiss">
-            <X size={16} />
-          </button>
+        <div className="fixed top-4 left-4 right-4 z-[60] max-w-2xl mx-auto animate-slide-up">
+          <div className="rounded-2xl border border-red-500/30 bg-red-500/10 backdrop-blur-xl p-4 flex items-start justify-between gap-3 shadow-lg">
+            <div className="text-xs sm:text-sm text-red-200">{error}</div>
+            <button 
+              onClick={clearError} 
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition flex-shrink-0 hover:scale-105 active:scale-95"
+              aria-label="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
 
       {/* SPLASH */}
       {phase === "splash" && (
         <div className="fixed inset-0 bg-black flex items-center justify-center z-50 overflow-hidden px-4">
-          <div className="absolute inset-0 bg-gradient-to-tr from-purple-900/20 via-black to-fuchsia-900/20 animate-pulse" />
-          <div className="relative flex flex-col items-center">
-            <div className="w-24 h-24 sm:w-32 sm:h-32 mb-6 sm:mb-8 relative">
-              <div className="absolute inset-0 border-4 border-cyan-500 rounded-full animate-ping opacity-25" />
-              <div className="absolute inset-0 border-t-4 border-cyan-400 rounded-full animate-spin" />
-              <Disc className="absolute inset-0 m-auto text-white" size={36} />
+          <div className="absolute inset-0 bg-gradient-to-tr from-purple-900/30 via-black to-fuchsia-900/20" />
+          <div className="relative flex flex-col items-center animate-scale-in">
+            <div className="w-28 h-28 sm:w-36 sm:h-36 mb-8 relative">
+              <div className="absolute inset-0 rounded-full animate-pulse-glow" />
+              <div className="absolute inset-0 border-4 border-cyan-500/30 rounded-full animate-ping opacity-20" />
+              <div className="absolute inset-0 border-t-4 border-r-4 border-cyan-400 rounded-full animate-spin" />
+              <div className="absolute inset-2 border-b-4 border-l-4 border-purple-500/50 rounded-full animate-spin-slow" />
+              <Disc className="absolute inset-0 m-auto text-white animate-pulse-glow" size={44} />
             </div>
-            <h1 className="text-4xl sm:text-6xl font-black tracking-tighter text-white text-center">NEON SKY</h1>
-            <p className="text-fuchsia-300/60 font-mono tracking-widest text-[10px] sm:text-xs mt-2 uppercase text-center">Mastering Suite v4</p>
+            <h1 className="text-5xl sm:text-7xl font-black tracking-tighter text-white text-center neon-text">NEON SKY</h1>
+            <p className="text-fuchsia-300/60 font-mono tracking-[0.3em] sm:tracking-[0.4em] text-[10px] sm:text-xs mt-3 uppercase text-center">
+              Mastering Suite v4.5
+            </p>
+            <div className="mt-8 flex gap-2">
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" style={{ animationDelay: '0ms' }} />
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" style={{ animationDelay: '200ms' }} />
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" style={{ animationDelay: '400ms' }} />
+            </div>
           </div>
         </div>
       )}
 
       {/* BOOT */}
       {phase === "boot" && (
-        <div className="fixed inset-0 bg-black text-green-500 font-mono p-4 sm:p-8 text-xs sm:text-base leading-relaxed flex flex-col z-40">
+        <div className="fixed inset-0 bg-black text-green-500 font-mono p-4 sm:p-8 text-xs sm:text-sm leading-relaxed flex flex-col z-40">
           <div className="flex-1 space-y-1 sm:space-y-2 overflow-hidden">
             {[
               "INITIALIZING_CORE_SERVICES... OK",
               "SCANNING_DSP_HARDWARE... [3-BAND_EQ_DETECTED]",
               "MOUNTING_ID3_METADATA_MODULE... OK",
               "CALIBRATING_WAVEFORM_ANALYSER... OK",
+              "LOADING_AUDIO_WORKLETS... OK",
+              "CONFIGURING_LIMITER_PROCESSOR... OK",
               "SYNCING_MASTER_CLOCK... OK",
               "---------------------------------------",
               "READY_FOR_OPERATOR_INPUT.",
             ].map((m, i) => (
-              <div key={i} className="animate-in fade-in slide-in-from-left-4 duration-300 break-all sm:break-normal" style={{ animationDelay: `${i * 160}ms` }}>
-                {">"} {m}
+              <div 
+                key={i} 
+                className="animate-fade-in break-all sm:break-normal" 
+                style={{ animationDelay: `${i * 120}ms` }}
+              >
+                <span className="text-green-400/60">{">"}</span> {m}
               </div>
             ))}
-            <div className="animate-pulse mt-4 sm:mt-8">_ AWAITING_SYSTEM_INIT</div>
+            <div className="mt-6 sm:mt-8 animate-pulse flex items-center gap-2">
+              <span className="w-2 h-4 bg-green-500/80" />
+              <span className="text-green-400/80">AWAITING_SYSTEM_INIT</span>
+            </div>
           </div>
 
           <button
             onClick={handleInit}
-            className="w-full py-4 sm:py-6 border-2 border-green-500 text-green-500 font-bold hover:bg-green-500 hover:text-black transition-all uppercase tracking-[0.2em] sm:tracking-[0.3em] text-sm sm:text-base active:scale-[0.98]"
+            className="w-full py-5 sm:py-6 border-2 border-green-500/50 text-green-400 font-bold hover:bg-green-500 hover:text-black transition-all uppercase tracking-[0.2em] sm:tracking-[0.3em] text-sm sm:text-base active:scale-[0.98] rounded-lg hover:shadow-[0_0_30px_rgba(34,197,94,0.3)]"
           >
             Initialize Core
           </button>
@@ -313,69 +368,89 @@ export default function Home() {
       {phase === "player" && (
         <>
           <main className="relative z-10 flex flex-col items-center justify-center min-h-screen min-h-[100dvh] p-3 sm:p-6">
-            <div className="w-full max-w-[340px] sm:max-w-sm bg-zinc-900/60 backdrop-blur-3xl border border-white/10 ring-2 ring-black rounded-[2rem] sm:rounded-[3rem] p-5 sm:p-8 shadow-2xl flex flex-col items-center gap-4 sm:gap-5">
+            <div className="w-full max-w-[360px] sm:max-w-md glass-card rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl flex flex-col items-center gap-5 sm:gap-6 animate-scale-in">
               
+              {/* Header */}
+              <div className="w-full flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Zap className="text-cyan-400" size={16} />
+                  <span className="text-[10px] tracking-[0.3em] text-white/50 uppercase">NEON_SKY</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className={`w-1.5 h-1.5 rounded-full ${isPlaying ? 'bg-green-400 animate-pulse' : 'bg-white/20'}`} />
+                  <span className="text-[9px] tracking-[0.2em] text-white/40 uppercase">
+                    {isPlaying ? 'PLAYING' : 'READY'}
+                  </span>
+                </div>
+              </div>
+
               {/* Artwork Display */}
-              <div className="relative w-28 h-28 sm:w-36 sm:h-36 rounded-2xl overflow-hidden bg-zinc-800/50 border border-white/10 flex items-center justify-center flex-shrink-0">
+              <div className="relative w-32 h-32 sm:w-40 sm:h-40 rounded-3xl overflow-hidden bg-gradient-to-br from-zinc-800/50 to-zinc-900/50 border border-white/10 flex items-center justify-center flex-shrink-0 shadow-xl">
                 {track.artwork ? (
                   <img 
                     src={track.artwork} 
                     alt="Album artwork" 
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover transition-transform duration-700 hover:scale-110"
                   />
                 ) : (
-                  <Music className="text-white/20" size={40} />
+                  <Music className="text-white/20" size={48} />
                 )}
                 {isPlaying && (
-                  <div className="absolute inset-0 bg-cyan-500/10 animate-pulse" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-cyan-500/20 to-transparent animate-pulse" />
                 )}
+                <div className="absolute inset-0 shadow-[inset_0_0_30px_rgba(0,0,0,0.3)]" />
               </div>
 
               {/* Track Info */}
               <div className="text-center w-full px-2">
-                <span className="text-[8px] sm:text-[10px] text-cyan-400 tracking-[0.4em] sm:tracking-[0.5em] uppercase font-bold">Now Playing</span>
-                <h2 className="text-sm sm:text-lg font-bold truncate mt-1">{track.title}</h2>
-                <p className="text-[10px] sm:text-xs text-zinc-400 truncate">{track.artist}</p>
+                <span className="text-[9px] sm:text-[10px] text-cyan-400 tracking-[0.4em] sm:tracking-[0.5em] uppercase font-bold">Now Playing</span>
+                <h2 className="text-base sm:text-lg font-bold truncate mt-1.5 text-white/90">{track.title}</h2>
+                <p className="text-[11px] sm:text-xs text-white/50 truncate">{track.artist}</p>
                 {track.album && (
-                  <p className="text-[9px] sm:text-[10px] text-zinc-500 truncate mt-0.5">{track.album}</p>
+                  <p className="text-[10px] sm:text-[11px] text-white/30 truncate mt-0.5">{track.album}</p>
                 )}
               </div>
 
               {/* Visualizer */}
-              <div className="relative w-full h-20 sm:h-28 flex items-center justify-center">
-                <canvas ref={vizCanvasRef} className="absolute inset-0 w-full h-full rounded-xl opacity-80" />
-                <div className={cx("absolute inset-0 rounded-xl border border-white/10", isPlaying && "animate-pulse")} />
-                <div className="absolute right-2 top-2 flex items-center gap-1 bg-black/40 border border-white/10 rounded-full px-1 py-1 backdrop-blur">
+              <div className="relative w-full h-24 sm:h-32 flex items-center justify-center rounded-2xl overflow-hidden bg-black/40 border border-white/5">
+                <canvas ref={vizCanvasRef} className="absolute inset-0 w-full h-full opacity-90" />
+                <div className={cx("absolute inset-0 rounded-2xl", isPlaying && "animate-pulse")} />
+                
+                {/* Visualizer Controls */}
+                <div className="absolute right-2 top-2 flex items-center gap-1 bg-black/60 border border-white/10 rounded-full px-1.5 py-1 backdrop-blur-md">
                   <button
                     onClick={handleVizPrev}
-                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all active:scale-90"
                     aria-label="Previous visualizer mode"
                   >
                     <ChevronLeft size={14} />
                   </button>
                   <button
                     onClick={handleVizNext}
-                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition active:scale-95"
+                    className="w-6 h-6 rounded-full bg-white/5 hover:bg-white/15 flex items-center justify-center text-white/70 hover:text-white transition-all active:scale-90"
                     aria-label="Next visualizer mode"
                   >
                     <ChevronRight size={14} />
                   </button>
                 </div>
-                <div className="absolute left-2 bottom-2 text-[9px] text-white/50 uppercase tracking-[0.3em]">
-                  {vizMode}
+                
+                {/* Mode Indicator */}
+                <div className="absolute left-3 bottom-2 flex items-center gap-1.5 text-[9px] text-white/50 uppercase tracking-[0.2em] bg-black/40 px-2 py-1 rounded-full backdrop-blur-sm">
+                  {vizModeIcons[vizMode]}
+                  <span>{vizMode}</span>
                 </div>
               </div>
 
               {/* Transport + Circular progress (touch to seek) */}
-              <div className="w-full flex items-center justify-center gap-4">
+              <div className="w-full flex items-center justify-center gap-5">
                 <button
                   onClick={prevTrack}
                   disabled={playlist.length <= 1 || currentIndex === 0}
                   className={cx(
-                    "w-10 h-10 rounded-xl flex items-center justify-center border transition-all active:scale-95",
+                    "w-11 h-11 rounded-2xl flex items-center justify-center border transition-all active:scale-95",
                     playlist.length > 1 && currentIndex > 0
-                      ? "border-white/10 bg-white/5 hover:bg-white/10 text-white"
-                      : "border-white/5 bg-white/5 text-white/30 cursor-not-allowed"
+                      ? "btn-glass text-white"
+                      : "border-white/5 bg-white/5 text-white/20 cursor-not-allowed"
                   )}
                   aria-label="Previous track"
                 >
@@ -389,38 +464,40 @@ export default function Home() {
                   onPointerUp={onRingPointerUp}
                   onPointerCancel={onRingPointerCancel}
                   className={cx(
-                    "relative w-24 h-24 sm:w-28 sm:h-28 select-none touch-none",
+                    "relative w-28 h-28 sm:w-32 sm:h-32 select-none touch-none",
                     track.duration ? "cursor-pointer" : "cursor-default"
                   )}
                   aria-label="Seek ring"
                 >
-                  <div className="absolute inset-2 rounded-full bg-gradient-to-br from-amber-200/20 via-amber-500/10 to-amber-900/40 shadow-[inset_0_2px_10px_rgba(255,255,255,0.25),inset_0_-8px_14px_rgba(0,0,0,0.6),0_10px_18px_rgba(0,0,0,0.45)]" />
+                  {/* Glow effect */}
+                  <div className="absolute inset-1 rounded-full bg-gradient-to-br from-amber-200/10 via-amber-500/5 to-amber-900/20 shadow-[inset_0_2px_10px_rgba(255,255,255,0.2),inset_0_-8px_14px_rgba(0,0,0,0.5),0_10px_25px_rgba(0,0,0,0.4)]" />
+                  
                   <svg className="absolute inset-0" viewBox="0 0 120 120">
                     <defs>
                       <linearGradient id="scrub-track" x1="0" x2="1" y1="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(255,214,170,0.2)" />
-                        <stop offset="100%" stopColor="rgba(255,120,90,0.45)" />
+                        <stop offset="0%" stopColor="rgba(255,214,170,0.15)" />
+                        <stop offset="100%" stopColor="rgba(255,120,90,0.35)" />
                       </linearGradient>
                       <linearGradient id="scrub-progress" x1="0" x2="1" y1="1" y2="0">
                         <stop offset="0%" stopColor="rgba(255,159,67,0.95)" />
                         <stop offset="100%" stopColor="rgba(255,204,102,0.95)" />
                       </linearGradient>
                       <radialGradient id="scrub-handle" cx="30%" cy="30%" r="70%">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
+                        <stop offset="0%" stopColor="rgba(255,255,255,0.98)" />
                         <stop offset="60%" stopColor="rgba(255,191,115,0.95)" />
                         <stop offset="100%" stopColor="rgba(178,88,20,0.95)" />
                       </radialGradient>
                       <filter id="scrub-shadow" x="-50%" y="-50%" width="200%" height="200%">
-                        <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="rgba(0,0,0,0.7)" />
+                        <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(0,0,0,0.6)" />
                       </filter>
                     </defs>
-                    <circle cx="60" cy="60" r="50" stroke="url(#scrub-track)" strokeWidth="9" fill="none" />
+                    <circle cx="60" cy="60" r="50" stroke="url(#scrub-track)" strokeWidth="8" fill="none" />
                     <circle
                       cx="60"
                       cy="60"
                       r="50"
                       stroke="url(#scrub-progress)"
-                      strokeWidth="9"
+                      strokeWidth="8"
                       strokeLinecap="round"
                       fill="none"
                       strokeDasharray={`${Math.PI * 2 * 50}`}
@@ -432,9 +509,9 @@ export default function Home() {
                       <circle
                         cx={scrubHandle.cx}
                         cy={scrubHandle.cy}
-                        r="6.5"
+                        r="6"
                         fill="url(#scrub-handle)"
-                        stroke="rgba(255,255,255,0.6)"
+                        stroke="rgba(255,255,255,0.7)"
                         strokeWidth="1"
                         filter="url(#scrub-shadow)"
                       />
@@ -447,12 +524,12 @@ export default function Home() {
                     className={cx(
                       "absolute inset-3 rounded-full flex items-center justify-center transition-all shadow-2xl active:scale-90",
                       canPlay
-                        ? "bg-gradient-to-br from-white via-amber-50 to-amber-200 text-black hover:scale-105 shadow-[0_6px_18px_rgba(255,200,120,0.35)]"
+                        ? "bg-gradient-to-br from-white via-amber-50 to-amber-200 text-black hover:scale-105 shadow-[0_6px_20px_rgba(255,200,120,0.4)]"
                         : "bg-white/20 text-white/60 cursor-not-allowed"
                     )}
                     aria-label={isPlaying ? "Pause" : "Play"}
                   >
-                    {isPlaying ? <Pause fill="black" size={24} /> : <Play fill="black" className="ml-1" size={24} />}
+                    {isPlaying ? <Pause fill="black" size={26} /> : <Play fill="black" className="ml-1" size={26} />}
                   </button>
                 </div>
 
@@ -460,10 +537,10 @@ export default function Home() {
                   onClick={nextTrack}
                   disabled={playlist.length <= 1 || currentIndex >= playlist.length - 1}
                   className={cx(
-                    "w-10 h-10 rounded-xl flex items-center justify-center border transition-all active:scale-95",
+                    "w-11 h-11 rounded-2xl flex items-center justify-center border transition-all active:scale-95",
                     playlist.length > 1 && currentIndex < playlist.length - 1
-                      ? "border-white/10 bg-white/5 hover:bg-white/10 text-white"
-                      : "border-white/5 bg-white/5 text-white/30 cursor-not-allowed"
+                      ? "btn-glass text-white"
+                      : "border-white/5 bg-white/5 text-white/20 cursor-not-allowed"
                   )}
                   aria-label="Next track"
                 >
@@ -471,28 +548,31 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="w-full -mt-1 flex items-center justify-between text-[9px] sm:text-[10px] text-white/40 tracking-[0.2em] sm:tracking-[0.25em] uppercase">
-                <span>{formatTime(progressNowSeconds)}</span>
-                <span>
-                  {playlist.length > 1 ? `${currentIndex + 1}/${playlist.length}` : ""}
+              {/* Time Display */}
+              <div className="w-full -mt-1 flex items-center justify-between text-[10px] sm:text-[11px] text-white/40 tracking-[0.2em] sm:tracking-[0.25em] uppercase">
+                <span className="font-mono">{formatTime(progressNowSeconds)}</span>
+                <span className="text-white/20">
+                  {playlist.length > 1 ? `${currentIndex + 1}/${playlist.length}` : "—"}
                 </span>
-                <span>{formatTime(track.duration)}</span>
+                <span className="font-mono">{formatTime(track.duration)}</span>
               </div>
 
+              {/* Loading Indicator */}
               {isLoading && (
-                <div className="text-[9px] sm:text-[10px] text-white/50 tracking-[0.25em] uppercase">
-                  Loading…
+                <div className="flex items-center gap-2 text-[10px] text-white/50 tracking-[0.25em] uppercase">
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-cyan-400 rounded-full animate-spin" />
+                  <span>Loading…</span>
                 </div>
               )}
 
               {/* Volume control */}
-              <div className="w-full flex items-center gap-2 sm:gap-3">
+              <div className="w-full flex items-center gap-3 sm:gap-4">
                 <button
                   onClick={toggleMute}
-                  className="p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-white/60 hover:text-white active:scale-90"
+                  className="p-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-white/60 hover:text-white active:scale-90"
                   aria-label={isMuted ? "Unmute" : "Mute"}
                 >
-                  {isMuted || volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                  {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
                 </button>
                 <div className="flex-1 relative group">
                   <input
@@ -502,18 +582,14 @@ export default function Home() {
                     step={0.01}
                     value={volume}
                     onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer accent-cyan-500 
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 
-                      [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-[0_0_8px_#bc13fe]
-                      [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:bg-cyan-400 
-                      [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-[0_0_8px_#bc13fe]"
+                    className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer"
                   />
                   <div 
-                    className="absolute top-0 left-0 h-2 bg-cyan-500/50 rounded-full pointer-events-none"
+                    className="absolute top-0 left-0 h-2 bg-gradient-to-r from-cyan-500/70 to-cyan-400 rounded-full pointer-events-none transition-all"
                     style={{ width: `${volume * 100}%` }}
                   />
                 </div>
-                <span className="text-[9px] sm:text-[10px] text-white/40 tracking-[0.15em] sm:tracking-[0.25em] uppercase w-10 sm:w-12 text-right">
+                <span className="text-[10px] sm:text-[11px] text-white/40 tracking-[0.15em] sm:tracking-[0.25em] uppercase w-12 text-right">
                   {Math.round(volume * 100)}%
                 </span>
               </div>
@@ -523,26 +599,26 @@ export default function Home() {
                 <div className="flex gap-3 sm:gap-4">
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 bg-white/5 border border-white/10 py-3 sm:py-4 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 text-[9px] sm:text-[10px] font-bold hover:bg-white/10 transition-all tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
+                    className="flex-1 btn-glass py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
                   >
-                    <Upload size={12} /> Load
+                    <Upload size={14} /> Load
                   </button>
                   <button
                     onClick={() => setSuiteOpen(true)}
-                    className="flex-1 bg-cyan-500 text-black py-3 sm:py-4 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 text-[9px] sm:text-[10px] font-bold hover:bg-cyan-400 transition-all tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
+                    className="flex-1 btn-primary py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase text-black active:scale-95"
                   >
-                    <Settings size={12} /> Suite
+                    <Settings size={14} /> Suite
                   </button>
                   <button
                     onClick={() => setQueueOpen(true)}
                     disabled={playlist.length === 0}
                     className={cx(
-                      "w-12 sm:w-14 bg-white/5 border border-white/10 py-3 sm:py-4 rounded-xl sm:rounded-2xl flex items-center justify-center transition-all active:scale-95",
-                      playlist.length ? "hover:bg-white/10 text-white" : "text-white/30 cursor-not-allowed"
+                      "w-14 sm:w-16 btn-glass py-3.5 sm:py-4 rounded-2xl flex items-center justify-center transition-all active:scale-95",
+                      playlist.length ? "text-white" : "text-white/20 cursor-not-allowed"
                     )}
                     aria-label="Queue"
                   >
-                    <ListMusic size={14} />
+                    <ListMusic size={16} />
                   </button>
                 </div>
               </div>
@@ -551,165 +627,173 @@ export default function Home() {
 
           {/* Queue (playlist) */}
           {queueOpen && (
-            <div className="fixed inset-0 z-[55] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-3">
-              <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950/80 shadow-2xl overflow-hidden">
-                <div className="px-5 py-4 flex items-center justify-between border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <ListMusic className="text-cyan-400" size={18} />
-                    <div className="text-xs font-bold tracking-[0.35em] uppercase text-white/70">Queue</div>
+            <div className="fixed inset-0 z-[55] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-3 animate-fade-in">
+              <div className="w-full max-w-md glass-card rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-slide-up">
+                <div className="px-6 py-5 flex items-center justify-between border-b border-white/10">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
+                      <ListMusic className="text-cyan-400" size={18} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold tracking-[0.3em] uppercase text-white/80">Queue</div>
+                      <div className="text-[9px] text-white/40 tracking-[0.15em]">{playlist.length} tracks</div>
+                    </div>
                   </div>
                   <button
                     onClick={() => setQueueOpen(false)}
-                    className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition active:scale-95"
+                    className="p-2.5 rounded-xl btn-glass transition-all active:scale-90"
                     aria-label="Close queue"
                   >
-                    <X size={16} />
+                    <X size={18} />
                   </button>
                 </div>
 
-                <div className="px-5 py-3 border-b border-white/10 space-y-3">
+                <div className="px-6 py-4 border-b border-white/10 space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" size={14} />
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" size={14} />
                       <input
                         value={queueSearch}
                         onChange={(e) => setQueueSearch(e.target.value)}
-                        placeholder="Search title, artist, album, type..."
-                        className="w-full rounded-xl bg-white/5 border border-white/10 pl-9 pr-3 py-2 text-xs text-white/80 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                        placeholder="Search tracks..."
+                        className="w-full rounded-xl bg-white/5 border border-white/10 pl-10 pr-3 py-2.5 text-xs text-white/80 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
                       />
                     </div>
                     <button
                       onClick={() => addFileInputRef.current?.click()}
-                      className="h-9 px-3 rounded-xl bg-white/5 border border-white/10 text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 hover:bg-white/10 transition"
+                      className="h-10 px-3.5 rounded-xl btn-glass text-[10px] uppercase tracking-[0.2em] flex items-center gap-2"
                     >
-                      <Plus size={12} /> Add
+                      <Plus size={14} />
                     </button>
                     <button
                       onClick={handleRemoveSelected}
                       disabled={selectedIds.size === 0}
                       className={cx(
-                        "h-9 px-3 rounded-xl border text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 transition",
+                        "h-10 px-3.5 rounded-xl border text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 transition-all",
                         selectedIds.size
                           ? "bg-red-500/20 border-red-500/30 text-red-200 hover:bg-red-500/30"
                           : "bg-white/5 border-white/10 text-white/30 cursor-not-allowed"
                       )}
                     >
-                      <Trash2 size={12} /> Remove
+                      <Trash2 size={14} />
                     </button>
                   </div>
-                  <div className="flex items-center justify-between text-[9px] text-white/40 uppercase tracking-[0.2em]">
-                    <button onClick={toggleSelectAll} className="flex items-center gap-2 hover:text-white/70 transition">
-                      <span className={cx("w-2 h-2 rounded-full", allSelected ? "bg-cyan-400" : "bg-white/20")} />
-                      {allSelected ? "Clear selection" : "Select all"}
+                  <div className="flex items-center justify-between text-[9px] text-white/40 uppercase tracking-[0.15em]">
+                    <button onClick={toggleSelectAll} className="flex items-center gap-2 hover:text-white/70 transition-colors">
+                      <span className={cx("w-2.5 h-2.5 rounded-sm border", allSelected ? "bg-cyan-400 border-cyan-400" : "border-white/30")} />
+                      {allSelected ? "Clear" : "Select all"}
                     </button>
                     <div className="flex items-center gap-4">
-                      <span>{playlist.length} tracks</span>
-                      <span>Total {formatDuration(totalDuration)}</span>
+                      <span>{formatDuration(totalDuration)}</span>
                       <span>{selectedIds.size} selected</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="max-h-[60vh] overflow-y-auto">
+                <div className="max-h-[55vh] overflow-y-auto">
                   {playlist.length === 0 ? (
-                    <div className="p-6 text-xs text-white/50">No tracks loaded.</div>
+                    <div className="p-8 text-center">
+                      <Music className="mx-auto text-white/20 mb-3" size={32} />
+                      <p className="text-xs text-white/50">No tracks loaded</p>
+                    </div>
                   ) : (
                     <div className="divide-y divide-white/5">
                       {filteredPlaylist.map((it) => {
                         const playlistIndex = playlist.findIndex((entry) => entry.id === it.id);
+                        const isCurrent = playlistIndex === currentIndex;
                         return (
                           <div
                             key={it.id}
                             className={cx(
-                              "w-full text-left px-5 py-4 flex items-start gap-3 hover:bg-white/5 transition",
-                              playlistIndex === currentIndex && "bg-white/5"
+                              "w-full text-left px-6 py-4 flex items-start gap-3 transition-all hover:bg-white/[0.02]",
+                              isCurrent && "bg-white/[0.04]"
                             )}
                           >
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(it.id)}
-                            onChange={() => toggleSelected(it.id)}
-                            className="mt-1 h-4 w-4 rounded border border-white/20 bg-white/5 accent-cyan-500"
-                            aria-label={`Select ${it.title}`}
-                          />
-                          <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center flex-shrink-0">
-                            {it.artwork ? (
-                              <img src={it.artwork} alt={`${it.title} artwork`} className="w-full h-full object-cover" />
-                            ) : (
-                              <Music size={16} className="text-white/30" />
-                            )}
-                            {it.extension && (
-                              <div className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[8px] uppercase text-white/60">
-                                {it.extension}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0 space-y-2">
                             <input
-                              value={it.title}
-                              onChange={(e) => updatePlaylistItem(it.id, { title: e.target.value })}
-                              className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-xs text-white/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
-                              placeholder="Track title"
+                              type="checkbox"
+                              checked={selectedIds.has(it.id)}
+                              onChange={() => toggleSelected(it.id)}
+                              className="mt-1.5 h-4 w-4 rounded border border-white/20 bg-white/5 accent-cyan-500 cursor-pointer"
+                              aria-label={`Select ${it.title}`}
                             />
-                            <div className="grid grid-cols-2 gap-2">
-                              <input
-                                value={it.artist}
-                                onChange={(e) => updatePlaylistItem(it.id, { artist: e.target.value })}
-                                className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
-                                placeholder="Artist"
-                              />
-                              <input
-                                value={it.album}
-                                onChange={(e) => updatePlaylistItem(it.id, { album: e.target.value })}
-                                className="w-full rounded-lg bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white/70 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
-                                placeholder="Album"
-                              />
+                            <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center flex-shrink-0">
+                              {it.artwork ? (
+                                <img src={it.artwork} alt={`${it.title} artwork`} className="w-full h-full object-cover" />
+                              ) : (
+                                <Music size={18} className="text-white/30" />
+                              )}
+                              {it.extension && (
+                                <div className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[8px] uppercase text-white/50">
+                                  {it.extension}
+                                </div>
+                              )}
                             </div>
-                            <div className="flex items-center gap-3 text-[9px] text-white/40 uppercase tracking-[0.2em]">
-                              <span>{formatDuration(it.duration)}</span>
-                              <span>#{playlistIndex + 1}</span>
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            <button
-                              onClick={() => {
-                                setQueueOpen(false);
-                                void loadTrackAt(playlistIndex, { autoplay: true });
-                              }}
-                              className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition"
-                              aria-label={`Play ${it.title}`}
-                            >
-                              <Play size={12} />
-                            </button>
-                            <label className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition cursor-pointer">
-                              <ImagePlus size={12} />
+                            <div className="flex-1 min-w-0 space-y-2">
                               <input
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0];
-                                  if (file) updatePlaylistArtwork(it.id, file);
-                                  event.target.value = "";
+                                value={it.title}
+                                onChange={(e) => updatePlaylistItem(it.id, { title: e.target.value })}
+                                className="w-full rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5 text-xs text-white/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
+                                placeholder="Track title"
+                              />
+                              <div className="grid grid-cols-2 gap-2">
+                                <input
+                                  value={it.artist}
+                                  onChange={(e) => updatePlaylistItem(it.id, { artist: e.target.value })}
+                                  className="w-full rounded-lg bg-white/5 border border-white/10 px-2.5 py-1 text-[10px] text-white/60 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
+                                  placeholder="Artist"
+                                />
+                                <input
+                                  value={it.album}
+                                  onChange={(e) => updatePlaylistItem(it.id, { album: e.target.value })}
+                                  className="w-full rounded-lg bg-white/5 border border-white/10 px-2.5 py-1 text-[10px] text-white/60 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
+                                  placeholder="Album"
+                                />
+                              </div>
+                              <div className="flex items-center gap-3 text-[9px] text-white/30 uppercase tracking-[0.15em]">
+                                <span>{formatDuration(it.duration)}</span>
+                                <span>#{playlistIndex + 1}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setQueueOpen(false);
+                                  void loadTrackAt(playlistIndex, { autoplay: true });
                                 }}
-                              />
-                            </label>
-                            <button
-                              onClick={() => {
-                                setSelectedIds((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(it.id);
-                                  return next;
-                                });
-                                removePlaylistItems([it.id]);
-                              }}
-                              className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition text-red-200"
-                              aria-label={`Remove ${it.title}`}
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                                className="w-8 h-8 rounded-xl btn-glass flex items-center justify-center active:scale-90"
+                                aria-label={`Play ${it.title}`}
+                              >
+                                <Play size={12} />
+                              </button>
+                              <label className="w-8 h-8 rounded-xl btn-glass flex items-center justify-center cursor-pointer active:scale-90">
+                                <ImagePlus size={12} />
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    if (file) updatePlaylistArtwork(it.id, file);
+                                    event.target.value = "";
+                                  }}
+                                />
+                              </label>
+                              <button
+                                onClick={() => {
+                                  setSelectedIds((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(it.id);
+                                    return next;
+                                  });
+                                  removePlaylistItems([it.id]);
+                                }}
+                                className="w-8 h-8 rounded-xl btn-glass flex items-center justify-center text-red-300/70 hover:text-red-300 active:scale-90"
+                                aria-label={`Remove ${it.title}`}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
                           </div>
-                        </div>
                         );
                       })}
                     </div>
@@ -721,66 +805,84 @@ export default function Home() {
 
           {/* SUITE */}
           <div className={cx(
-            "fixed inset-0 z-50 bg-[#050505] transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] flex flex-col",
+            "fixed inset-0 z-50 bg-[#030305] transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] flex flex-col",
             suiteOpen ? "translate-y-0" : "translate-y-full"
           )}>
-            <header className="px-4 sm:px-8 py-4 sm:py-6 flex justify-between items-center border-b border-white/5 bg-black">
-              <div className="flex items-center gap-2 sm:gap-3">
-                <Zap className="text-cyan-400" size={18} />
-                <h2 className="text-base sm:text-xl font-black tracking-[0.15em] sm:tracking-[0.2em] uppercase">NEON_SKY.ENGINE</h2>
+            {/* Header */}
+            <header className="px-4 sm:px-8 py-4 sm:py-5 flex justify-between items-center border-b border-white/5 bg-black/50 backdrop-blur-xl">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
+                  <Zap className="text-cyan-400" size={20} />
+                </div>
+                <div>
+                  <h2 className="text-lg sm:text-xl font-black tracking-[0.1em] sm:tracking-[0.15em] uppercase">NEON_SKY.ENGINE</h2>
+                  <p className="text-[9px] text-white/30 tracking-[0.2em] uppercase">Mastering Suite v4.5</p>
+                </div>
               </div>
-              <button onClick={() => setSuiteOpen(false)} className="p-2 sm:p-3 bg-white/5 hover:bg-white/10 rounded-full transition-all active:scale-90">
-                <X size={18} />
+              <button 
+                onClick={() => setSuiteOpen(false)} 
+                className="p-2.5 sm:p-3 btn-glass rounded-xl transition-all active:scale-90"
+              >
+                <X size={20} />
               </button>
             </header>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-12 space-y-6 sm:space-y-12">
-              <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-12">
-                <div className="lg:col-span-4 flex flex-col gap-6 sm:gap-10">
-                  <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
-                    <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Metering</label>
-                    <div className="grid grid-cols-2 gap-3 text-[10px] sm:text-xs text-white/70">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">Peak</span>
-                        <span className="text-cyan-200 font-semibold">{formatDb(toDb(meter.peak))} dB</span>
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 space-y-6 sm:space-y-10">
+              <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-10">
+                
+                {/* Left Column */}
+                <div className="lg:col-span-4 flex flex-col gap-5 sm:gap-8">
+                  
+                  {/* Metering Panel */}
+                  <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Activity size={14} className="text-cyan-400" />
+                      <label className="text-[10px] text-cyan-400 uppercase tracking-[0.3em] font-bold">Metering</label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-[11px] sm:text-xs text-white/70">
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">Peak</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{formatDb(toDb(meter.peak))} dB</span>
                       </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">RMS</span>
-                        <span className="text-cyan-200 font-semibold">{formatDb(toDb(meter.rms))} dB</span>
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">RMS</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{formatDb(toDb(meter.rms))} dB</span>
                       </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS M</span>
-                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsMomentary)} LU</span>
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">LUFS M</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{formatDb(meter.lufsMomentary)} LU</span>
                       </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS S</span>
-                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsShort)} LU</span>
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">LUFS S</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{formatDb(meter.lufsShort)} LU</span>
                       </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">LUFS I</span>
-                        <span className="text-cyan-200 font-semibold">{formatDb(meter.lufsIntegrated)} LU</span>
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">LUFS I</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{formatDb(meter.lufsIntegrated)} LU</span>
                       </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-white/40 uppercase tracking-[0.2em]">Corr</span>
-                        <span className="text-cyan-200 font-semibold">{meter.correlation.toFixed(2)}</span>
+                      <div className="flex flex-col gap-1 p-2 rounded-xl bg-white/5">
+                        <span className="text-white/30 uppercase tracking-[0.15em] text-[9px]">Corr</span>
+                        <span className="text-cyan-200 font-semibold font-mono">{meter.correlation.toFixed(2)}</span>
                       </div>
                     </div>
-                    <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                    <div className="h-2.5 rounded-full bg-white/10 overflow-hidden">
                       <div
-                        className="h-full bg-cyan-400"
+                        className="h-full bg-gradient-to-r from-cyan-500 to-cyan-400 transition-all duration-150"
                         style={{ width: `${clampValue((meter.correlation + 1) * 50, 0, 100)}%` }}
                       />
                     </div>
                   </div>
 
-                  <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
-                    <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Presets</label>
+                  {/* Presets Panel */}
+                  <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
+                    <label className="text-[10px] text-cyan-400 uppercase tracking-[0.3em] font-bold">Presets</label>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => recallPresetSlot("A")}
                         className={cx(
-                          "flex-1 py-2 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition",
-                          activePresetSlot === "A" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                          "flex-1 py-2.5 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition-all active:scale-95",
+                          activePresetSlot === "A" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5 hover:border-white/20"
                         )}
                       >
                         A {presetA ? "●" : ""}
@@ -788,8 +890,8 @@ export default function Home() {
                       <button
                         onClick={() => recallPresetSlot("B")}
                         className={cx(
-                          "flex-1 py-2 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition",
-                          activePresetSlot === "B" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                          "flex-1 py-2.5 rounded-xl border text-[10px] font-bold tracking-[0.25em] uppercase transition-all active:scale-95",
+                          activePresetSlot === "B" ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5 hover:border-white/20"
                         )}
                       >
                         B {presetB ? "●" : ""}
@@ -798,13 +900,13 @@ export default function Home() {
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => storePresetSlot("A")}
-                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                        className="py-2 rounded-xl btn-glass text-[9px] tracking-[0.2em] uppercase text-white/60"
                       >
                         Store A
                       </button>
                       <button
                         onClick={() => storePresetSlot("B")}
-                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                        className="py-2 rounded-xl btn-glass text-[9px] tracking-[0.2em] uppercase text-white/60"
                       >
                         Store B
                       </button>
@@ -812,13 +914,13 @@ export default function Home() {
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={exportPresetJson}
-                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                        className="py-2 rounded-xl btn-glass text-[9px] tracking-[0.2em] uppercase text-white/60"
                       >
                         Save JSON
                       </button>
                       <button
                         onClick={() => presetInputRef.current?.click()}
-                        className="py-2 rounded-xl border border-white/10 text-[9px] tracking-[0.2em] uppercase text-white/60 hover:bg-white/10 transition"
+                        className="py-2 rounded-xl btn-glass text-[9px] tracking-[0.2em] uppercase text-white/60"
                       >
                         Load JSON
                       </button>
@@ -826,30 +928,31 @@ export default function Home() {
                     <button
                       onClick={() => setGainMatchEnabled(!gainMatchEnabled)}
                       className={cx(
-                        "w-full py-2 rounded-xl border text-[9px] tracking-[0.25em] uppercase transition",
-                        gainMatchEnabled ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                        "w-full py-2.5 rounded-xl border text-[9px] tracking-[0.25em] uppercase transition-all active:scale-95",
+                        gainMatchEnabled ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
                       )}
                     >
                       Gain Match {gainMatchEnabled ? "On" : "Off"}
                     </button>
                   </div>
 
-                  <div className="bg-white/5 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-white/10 space-y-4 sm:space-y-6">
-                    <label className="text-[9px] sm:text-[10px] text-cyan-400 uppercase tracking-[0.3em] sm:tracking-[0.35em] font-bold">Export</label>
-                    <div className="flex items-center justify-between text-[9px] sm:text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                  {/* Export Panel */}
+                  <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
+                    <label className="text-[10px] text-cyan-400 uppercase tracking-[0.3em] font-bold">Export</label>
+                    <div className="flex items-center justify-between text-[10px] text-white/60 uppercase tracking-[0.2em]">
                       <span>Loudness Normalize</span>
                       <button
                         onClick={() => setNormalizeLoudness(!normalizeLoudness)}
                         className={cx(
-                          "px-3 py-1 rounded-full border transition",
-                          normalizeLoudness ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                          "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                          normalizeLoudness ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
                         )}
                       >
                         {normalizeLoudness ? "On" : "Off"}
                       </button>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-[9px] sm:text-[10px] text-white/40 uppercase tracking-[0.2em]">Target</span>
+                      <span className="text-[10px] text-white/40 uppercase tracking-[0.15em]">Target</span>
                       <input
                         type="range"
                         min={-20}
@@ -857,30 +960,45 @@ export default function Home() {
                         step={0.5}
                         value={targetLufs}
                         onChange={(e) => setTargetLufs(parseFloat(e.target.value))}
-                        className="flex-1 accent-cyan-500"
+                        className="flex-1"
                       />
-                      <span className="text-[9px] sm:text-[10px] text-white/70 w-12 text-right">{targetLufs} LUFS</span>
+                      <span className="text-[10px] text-white/70 w-14 text-right font-mono">{targetLufs} LUFS</span>
                     </div>
                     <button
                       disabled={!canExport || isExporting}
                       onClick={startExport}
                       className={cx(
                         "w-full py-4 sm:py-5 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 sm:gap-3 font-bold transition-all tracking-[0.2em] sm:tracking-[0.25em] uppercase text-sm active:scale-95",
-                        !canExport || isExporting ? "bg-white/10 text-white/40 cursor-not-allowed" : "bg-white text-black hover:bg-zinc-200"
+                        !canExport || isExporting 
+                          ? "bg-white/5 text-white/30 cursor-not-allowed" 
+                          : "btn-primary text-black"
                       )}
                     >
-                      {isExporting ? "Exporting…" : (<><Download size={16} /> Bounce</>)}
+                      {isExporting ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                          Exporting…
+                        </>
+                      ) : (
+                        <><Download size={18} /> Bounce</>
+                      )}
                     </button>
                   </div>
                 </div>
 
-                <div className="lg:col-span-8 flex flex-col gap-6 sm:gap-8">
-                  <div className="relative bg-black rounded-2xl sm:rounded-[3rem] border border-white/10 p-5 sm:p-10 shadow-2xl overflow-hidden min-h-[300px] sm:min-h-[350px]">
-                    <div className="flex justify-between items-center mb-4 sm:mb-8">
-                      <span className="text-[9px] sm:text-[10px] font-black tracking-[0.3em] sm:tracking-[0.4em] text-white/30 uppercase">Parametric EQ</span>
+                {/* Right Column */}
+                <div className="lg:col-span-8 flex flex-col gap-5 sm:gap-6">
+                  
+                  {/* EQ Panel */}
+                  <div className="glass-card rounded-2xl sm:rounded-[2.5rem] p-5 sm:p-8 shadow-2xl overflow-hidden">
+                    <div className="flex justify-between items-center mb-5 sm:mb-6">
+                      <div className="flex items-center gap-2">
+                        <Radio size={14} className="text-white/30" />
+                        <span className="text-[10px] font-black tracking-[0.3em] text-white/40 uppercase">Parametric EQ</span>
+                      </div>
                       <button
                         onClick={resetEq}
-                        className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-[9px] sm:text-[10px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
+                        className="px-4 py-2 rounded-xl btn-glass text-[9px] sm:text-[10px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
                       >
                         Reset
                       </button>
@@ -891,45 +1009,67 @@ export default function Home() {
                       onMouseDown={onGraphMouseDown}
                       onTouchStart={onGraphTouchStart}
                       onTouchMove={onGraphTouchMove}
-                      className="relative h-36 sm:h-48 w-full border border-white/5 bg-zinc-950/50 rounded-xl sm:rounded-2xl cursor-crosshair overflow-hidden touch-none"
+                      className="relative h-40 sm:h-52 w-full border border-white/5 bg-gradient-to-b from-zinc-950/80 to-black/90 rounded-2xl cursor-crosshair overflow-hidden touch-none"
                     >
-                      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-70">
+                      {/* Grid lines */}
+                      <div className="absolute inset-0 opacity-20">
+                        <div className="absolute inset-0" style={{
+                          backgroundImage: `
+                            linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+                            linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)
+                          `,
+                          backgroundSize: '25% 25%',
+                        }} />
+                      </div>
+                      
+                      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-80">
                         <path
-                          d={`M 0 ${72} Q 25% ${72 - eq.low * 2.5}, 50% ${72 - eq.mid * 2.5} T 100% ${72 - eq.high * 2.5}`}
+                          d={`M 0 ${80} Q 25% ${80 - eq.low * 2.8}, 50% ${80 - eq.mid * 2.8} T 100% ${80 - eq.high * 2.8}`}
                           stroke={NEON.hex}
-                          strokeWidth="3"
+                          strokeWidth="2.5"
                           fill="none"
-                          className="transition-all duration-300 sm:hidden"
+                          className="transition-all duration-300 drop-shadow-[0_0_8px_rgba(188,19,254,0.5)]"
+                          style={{ display: 'none' }}
                         />
                         <path
-                          d={`M 0 96 Q 25% ${96 - eq.low * 3.5}, 50% ${96 - eq.mid * 3.5} T 100% ${96 - eq.high * 3.5}`}
+                          d={`M 0 104 Q 25% ${104 - eq.low * 3.8}, 50% ${104 - eq.mid * 3.8} T 100% ${104 - eq.high * 3.8}`}
                           stroke={NEON.hex}
-                          strokeWidth="3"
+                          strokeWidth="2.5"
                           fill="none"
-                          className="transition-all duration-300 hidden sm:block"
+                          className="transition-all duration-300 drop-shadow-[0_0_10px_rgba(188,19,254,0.6)]"
                         />
                       </svg>
 
-                      <div className="absolute inset-0 flex items-center justify-around px-6 sm:px-12">
+                      <div className="absolute inset-0 flex items-center justify-around px-8 sm:px-14">
                         {(["low", "mid", "high"] as Band[]).map((band) => (
                           <div
                             key={band}
                             className={cx(
-                              "w-3 h-3 sm:w-4 sm:h-4 rounded-full border-2 transition-all",
-                              activeBand === band ? "bg-cyan-500 border-white scale-125 sm:scale-150 shadow-[0_0_15px_#bc13fe]" : "bg-transparent border-white/40"
+                              "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 transition-all duration-200",
+                              activeBand === band 
+                                ? "bg-cyan-400 border-white scale-125 shadow-[0_0_20px_rgba(188,19,254,0.8)]" 
+                                : "bg-transparent border-white/30 hover:border-white/50"
                             )}
-                            style={{ transform: `translateY(${-eq[band] * 1.5}px)` }}
+                            style={{ transform: `translateY(${-eq[band] * 1.6}px)` }}
                           />
                         ))}
                       </div>
                     </div>
 
-                    <div className="mt-4 sm:mt-8 grid grid-cols-3 gap-2 sm:gap-6">
+                    <div className="mt-5 sm:mt-6 grid grid-cols-3 gap-3 sm:gap-4">
                       {(["low", "mid", "high"] as Band[]).map((band) => (
-                        <div key={band} className={cx("p-3 sm:p-6 rounded-xl sm:rounded-3xl border", activeBand === band ? "bg-zinc-900 border-cyan-500/50" : "bg-zinc-950 border-white/5")}>
-                          <div className="flex flex-col sm:flex-row justify-between items-center sm:items-center mb-2 sm:mb-4 gap-1">
-                            <span className="text-[8px] sm:text-[10px] font-bold text-zinc-500 uppercase tracking-[0.2em] sm:tracking-[0.35em]">{band}</span>
-                            <span className="text-sm sm:text-xl font-black text-cyan-400">{eq[band]}dB</span>
+                        <div 
+                          key={band} 
+                          className={cx(
+                            "p-4 sm:p-5 rounded-2xl border transition-all",
+                            activeBand === band 
+                              ? "bg-zinc-900/80 border-cyan-500/40 neon-glow-sm" 
+                              : "bg-zinc-950/50 border-white/5"
+                          )}
+                        >
+                          <div className="flex flex-col sm:flex-row justify-between items-center mb-3 gap-1">
+                            <span className="text-[9px] sm:text-[10px] font-bold text-zinc-500 uppercase tracking-[0.2em] sm:tracking-[0.3em]">{band}</span>
+                            <span className="text-base sm:text-lg font-black text-cyan-400 font-mono">{eq[band]}dB</span>
                           </div>
 
                           <input
@@ -940,30 +1080,34 @@ export default function Home() {
                             value={eq[band]}
                             onChange={(e) => applyBandGain(band, parseInt(e.target.value, 10))}
                             onFocus={() => setActiveBand(band)}
-                            className="w-full accent-cyan-500 h-2"
+                            className="w-full"
                           />
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                  {/* Processing Modules Grid */}
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                    
+                    {/* Compressor */}
+                    <div className="glass-card rounded-2xl p-5 sm:p-6 space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Compressor</span>
                         <button
                           onClick={() => setCompressor((prev) => ({ ...prev, bypass: !prev.bypass }))}
                           className={cx(
-                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
-                            compressor.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                            "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                            compressor.bypass ? "border-white/10 text-white/40 bg-white/5" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm"
                           )}
                         >
                           {compressor.bypass ? "Bypass" : "Active"}
                         </button>
                       </div>
-                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <div className="space-y-3 text-[11px] text-white/60 uppercase tracking-[0.15em]">
                         <label className="flex items-center justify-between gap-3">
-                          Threshold <span className="text-cyan-200">{compressor.threshold} dB</span>
+                          <span>Threshold</span>
+                          <span className="text-cyan-200 font-mono">{compressor.threshold} dB</span>
                         </label>
                         <input
                           type="range"
@@ -972,10 +1116,11 @@ export default function Home() {
                           step={1}
                           value={compressor.threshold}
                           onChange={(e) => setCompressor((prev) => ({ ...prev, threshold: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Ratio <span className="text-cyan-200">{compressor.ratio.toFixed(1)}:1</span>
+                          <span>Ratio</span>
+                          <span className="text-cyan-200 font-mono">{compressor.ratio.toFixed(1)}:1</span>
                         </label>
                         <input
                           type="range"
@@ -984,10 +1129,11 @@ export default function Home() {
                           step={0.1}
                           value={compressor.ratio}
                           onChange={(e) => setCompressor((prev) => ({ ...prev, ratio: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Attack <span className="text-cyan-200">{Math.round(compressor.attack * 1000)} ms</span>
+                          <span>Attack</span>
+                          <span className="text-cyan-200 font-mono">{Math.round(compressor.attack * 1000)} ms</span>
                         </label>
                         <input
                           type="range"
@@ -996,10 +1142,11 @@ export default function Home() {
                           step={1}
                           value={compressor.attack * 1000}
                           onChange={(e) => setCompressor((prev) => ({ ...prev, attack: parseFloat(e.target.value) / 1000 }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Release <span className="text-cyan-200">{Math.round(compressor.release * 1000)} ms</span>
+                          <span>Release</span>
+                          <span className="text-cyan-200 font-mono">{Math.round(compressor.release * 1000)} ms</span>
                         </label>
                         <input
                           type="range"
@@ -1008,10 +1155,11 @@ export default function Home() {
                           step={10}
                           value={compressor.release * 1000}
                           onChange={(e) => setCompressor((prev) => ({ ...prev, release: parseFloat(e.target.value) / 1000 }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Makeup <span className="text-cyan-200">{compressor.makeup} dB</span>
+                          <span>Makeup</span>
+                          <span className="text-cyan-200 font-mono">{compressor.makeup} dB</span>
                         </label>
                         <input
                           type="range"
@@ -1020,27 +1168,29 @@ export default function Home() {
                           step={0.5}
                           value={compressor.makeup}
                           onChange={(e) => setCompressor((prev) => ({ ...prev, makeup: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                       </div>
                     </div>
 
-                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                    {/* Limiter */}
+                    <div className="glass-card rounded-2xl p-5 sm:p-6 space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Limiter</span>
                         <button
                           onClick={() => setLimiter((prev) => ({ ...prev, bypass: !prev.bypass }))}
                           className={cx(
-                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
-                            limiter.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                            "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                            limiter.bypass ? "border-white/10 text-white/40 bg-white/5" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm"
                           )}
                         >
                           {limiter.bypass ? "Bypass" : "Active"}
                         </button>
                       </div>
-                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <div className="space-y-3 text-[11px] text-white/60 uppercase tracking-[0.15em]">
                         <label className="flex items-center justify-between gap-3">
-                          Threshold <span className="text-cyan-200">{limiter.threshold} dB</span>
+                          <span>Threshold</span>
+                          <span className="text-cyan-200 font-mono">{limiter.threshold} dB</span>
                         </label>
                         <input
                           type="range"
@@ -1049,10 +1199,11 @@ export default function Home() {
                           step={0.5}
                           value={limiter.threshold}
                           onChange={(e) => setLimiter((prev) => ({ ...prev, threshold: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Ceiling <span className="text-cyan-200">{limiter.ceiling} dB</span>
+                          <span>Ceiling</span>
+                          <span className="text-cyan-200 font-mono">{limiter.ceiling} dB</span>
                         </label>
                         <input
                           type="range"
@@ -1061,10 +1212,11 @@ export default function Home() {
                           step={0.1}
                           value={limiter.ceiling}
                           onChange={(e) => setLimiter((prev) => ({ ...prev, ceiling: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Release <span className="text-cyan-200">{limiter.release} ms</span>
+                          <span>Release</span>
+                          <span className="text-cyan-200 font-mono">{limiter.release} ms</span>
                         </label>
                         <input
                           type="range"
@@ -1073,13 +1225,13 @@ export default function Home() {
                           step={10}
                           value={limiter.release}
                           onChange={(e) => setLimiter((prev) => ({ ...prev, release: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <button
                           onClick={() => setLimiter((prev) => ({ ...prev, softClip: !prev.softClip }))}
                           className={cx(
-                            "w-full py-2 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition",
-                            limiter.softClip ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                            "w-full py-2.5 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition-all active:scale-95",
+                            limiter.softClip ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
                           )}
                         >
                           Soft Clip {limiter.softClip ? "On" : "Off"}
@@ -1087,22 +1239,24 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                    {/* Saturation */}
+                    <div className="glass-card rounded-2xl p-5 sm:p-6 space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Saturation</span>
                         <button
                           onClick={() => setSaturation((prev) => ({ ...prev, bypass: !prev.bypass }))}
                           className={cx(
-                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
-                            saturation.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                            "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                            saturation.bypass ? "border-white/10 text-white/40 bg-white/5" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm"
                           )}
                         >
                           {saturation.bypass ? "Bypass" : "Active"}
                         </button>
                       </div>
-                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <div className="space-y-3 text-[11px] text-white/60 uppercase tracking-[0.15em]">
                         <label className="flex items-center justify-between gap-3">
-                          Drive <span className="text-cyan-200">{Math.round(saturation.drive * 100)}%</span>
+                          <span>Drive</span>
+                          <span className="text-cyan-200 font-mono">{Math.round(saturation.drive * 100)}%</span>
                         </label>
                         <input
                           type="range"
@@ -1111,10 +1265,11 @@ export default function Home() {
                           step={0.01}
                           value={saturation.drive}
                           onChange={(e) => setSaturation((prev) => ({ ...prev, drive: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Mix <span className="text-cyan-200">{Math.round(saturation.mix * 100)}%</span>
+                          <span>Mix</span>
+                          <span className="text-cyan-200 font-mono">{Math.round(saturation.mix * 100)}%</span>
                         </label>
                         <input
                           type="range"
@@ -1123,27 +1278,29 @@ export default function Home() {
                           step={0.01}
                           value={saturation.mix}
                           onChange={(e) => setSaturation((prev) => ({ ...prev, mix: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                       </div>
                     </div>
 
-                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4">
+                    {/* Stereo Tools */}
+                    <div className="glass-card rounded-2xl p-5 sm:p-6 space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Stereo Tools</span>
                         <button
                           onClick={() => setStereo((prev) => ({ ...prev, bypass: !prev.bypass }))}
                           className={cx(
-                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
-                            stereo.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                            "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                            stereo.bypass ? "border-white/10 text-white/40 bg-white/5" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm"
                           )}
                         >
                           {stereo.bypass ? "Bypass" : "Active"}
                         </button>
                       </div>
-                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <div className="space-y-3 text-[11px] text-white/60 uppercase tracking-[0.15em]">
                         <label className="flex items-center justify-between gap-3">
-                          Width <span className="text-cyan-200">{stereo.width.toFixed(2)}x</span>
+                          <span>Width</span>
+                          <span className="text-cyan-200 font-mono">{stereo.width.toFixed(2)}x</span>
                         </label>
                         <input
                           type="range"
@@ -1152,10 +1309,11 @@ export default function Home() {
                           step={0.01}
                           value={stereo.width}
                           onChange={(e) => setStereo((prev) => ({ ...prev, width: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <label className="flex items-center justify-between gap-3">
-                          Pan <span className="text-cyan-200">{stereo.pan.toFixed(2)}</span>
+                          <span>Pan</span>
+                          <span className="text-cyan-200 font-mono">{stereo.pan.toFixed(2)}</span>
                         </label>
                         <input
                           type="range"
@@ -1164,13 +1322,13 @@ export default function Home() {
                           step={0.01}
                           value={stereo.pan}
                           onChange={(e) => setStereo((prev) => ({ ...prev, pan: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                         <button
                           onClick={() => setStereo((prev) => ({ ...prev, mono: !prev.mono }))}
                           className={cx(
-                            "w-full py-2 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition",
-                            stereo.mono ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10" : "border-white/10 text-white/50 bg-white/5"
+                            "w-full py-2.5 rounded-xl border text-[9px] tracking-[0.2em] uppercase transition-all active:scale-95",
+                            stereo.mono ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
                           )}
                         >
                           Mono {stereo.mono ? "On" : "Off"}
@@ -1178,22 +1336,24 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="bg-black/70 rounded-2xl border border-white/10 p-5 sm:p-6 space-y-4 xl:col-span-2">
+                    {/* Output - Full Width */}
+                    <div className="glass-card rounded-2xl p-5 sm:p-6 space-y-4 xl:col-span-2">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Output</span>
                         <button
                           onClick={() => setOutput((prev) => ({ ...prev, bypass: !prev.bypass }))}
                           className={cx(
-                            "px-3 py-1 rounded-full border text-[9px] uppercase tracking-[0.2em]",
-                            output.bypass ? "border-white/10 text-white/40" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10"
+                            "px-3 py-1.5 rounded-full border text-[9px] uppercase tracking-[0.15em] transition-all",
+                            output.bypass ? "border-white/10 text-white/40 bg-white/5" : "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm"
                           )}
                         >
                           {output.bypass ? "Bypass" : "Active"}
                         </button>
                       </div>
-                      <div className="space-y-3 text-[10px] text-white/60 uppercase tracking-[0.2em]">
+                      <div className="space-y-3 text-[11px] text-white/60 uppercase tracking-[0.15em]">
                         <label className="flex items-center justify-between gap-3">
-                          Trim <span className="text-cyan-200">{output.trim} dB</span>
+                          <span>Trim</span>
+                          <span className="text-cyan-200 font-mono">{output.trim} dB</span>
                         </label>
                         <input
                           type="range"
@@ -1202,7 +1362,7 @@ export default function Home() {
                           step={0.5}
                           value={output.trim}
                           onChange={(e) => setOutput((prev) => ({ ...prev, trim: parseFloat(e.target.value) }))}
-                          className="w-full accent-cyan-500"
+                          className="w-full"
                         />
                       </div>
                     </div>
@@ -1211,17 +1371,21 @@ export default function Home() {
               </div>
             </div>
 
-            <footer className="px-4 sm:px-8 py-3 sm:py-4 bg-black border-t border-white/5 flex flex-col sm:flex-row gap-2 sm:gap-4 justify-between items-center text-[8px] sm:text-[10px] text-white/30 uppercase tracking-[0.15em] sm:tracking-[0.25em] font-bold">
-              <div className="flex gap-3 sm:gap-6 items-center flex-wrap justify-center">
-                <span className="flex items-center gap-1 sm:gap-2 text-cyan-400">
-                  <Terminal size={10} /> System_Stable
+            {/* Footer */}
+            <footer className="px-4 sm:px-8 py-3 sm:py-4 bg-black/80 backdrop-blur-xl border-t border-white/5 flex flex-col sm:flex-row gap-2 sm:gap-4 justify-between items-center text-[9px] sm:text-[10px] text-white/30 uppercase tracking-[0.15em] sm:tracking-[0.25em] font-bold">
+              <div className="flex gap-4 sm:gap-6 items-center flex-wrap justify-center">
+                <span className="flex items-center gap-1.5 sm:gap-2 text-cyan-400">
+                  <Terminal size={12} /> System_Stable
                 </span>
-                <span>BPM: 128</span>
+                <span className="text-white/20">|</span>
                 <span>Latency: 2ms</span>
+                <span className="text-white/20">|</span>
+                <span>SR: 48kHz</span>
               </div>
-              <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-center">
+              <div className="flex items-center gap-3 sm:gap-4 flex-wrap justify-center">
                 <span className="text-zinc-600 italic hidden sm:inline">"Sound is survival"</span>
-                <span>Core v4</span>
+                <span className="text-white/20">|</span>
+                <span>Core v4.5</span>
               </div>
             </footer>
           </div>
