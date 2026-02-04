@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { parseBlob } from "music-metadata";
+import { toast } from "sonner";
+import { clearStoredPlaylist, loadStoredPlaylist, saveStoredPlaylist } from "@/lib/playlistStore";
 
 export type Phase = "splash" | "boot" | "player";
 export type VizMode = "spectrum" | "oscilloscope" | "vectorscope";
 export type Band = "low" | "mid" | "high";
+export type PlaybackState = "idle" | "initializing" | "ready" | "playing" | "paused" | "error";
 
 type CompressorSettings = {
   threshold: number;
@@ -78,6 +81,7 @@ export type PlaylistItem = {
   artist: string;
   album: string;
   artwork: string | null;
+  artworkBlob?: Blob | null;
   duration: number;
   extension: string;
 };
@@ -87,6 +91,15 @@ type AudioEngineOptions = {
   visualizerActive: boolean;
   visualizerPulse?: boolean;
 };
+
+type ResumeState = {
+  currentIndex: number;
+  currentTime: number;
+  volume: number;
+  isMuted: boolean;
+};
+
+const RESUME_STATE_KEY = "neon-resume-state";
 
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 const dbToGain = (db: number) => Math.pow(10, db / 20);
@@ -117,15 +130,19 @@ const createAudioContext = () => {
   return new Ctx();
 };
 
-const parseID3Tags = async (file: File): Promise<{ title?: string; artist?: string; album?: string; artwork?: string }> => {
+const parseID3Tags = async (
+  file: File
+): Promise<{ title?: string; artist?: string; album?: string; artwork?: string; artworkBlob?: Blob }> => {
   try {
     const metadata = await parseBlob(file);
     let artworkUrl: string | undefined;
+    let artworkBlob: Blob | undefined;
 
     if (metadata.common.picture && metadata.common.picture.length > 0) {
       const picture = metadata.common.picture[0];
       const blob = new Blob([picture.data], { type: picture.format });
       artworkUrl = URL.createObjectURL(blob);
+      artworkBlob = blob;
     }
 
     return {
@@ -133,6 +150,7 @@ const parseID3Tags = async (file: File): Promise<{ title?: string; artist?: stri
       artist: metadata.common.artist,
       album: metadata.common.album,
       artwork: artworkUrl,
+      artworkBlob,
     };
   } catch (err) {
     console.warn("Failed to parse metadata:", err);
@@ -140,7 +158,12 @@ const parseID3Tags = async (file: File): Promise<{ title?: string; artist?: stri
   }
 };
 
-const hslToRgb = (hue: number, saturation: number, lightness: number) => {
+const hslToRgbMutable = (
+  hue: number,
+  saturation: number,
+  lightness: number,
+  target: { r: number; g: number; b: number }
+) => {
   const h = ((hue % 360) + 360) % 360;
   const s = clamp(saturation, 0, 1);
   const l = clamp(lightness, 0, 1);
@@ -169,11 +192,10 @@ const hslToRgb = (hue: number, saturation: number, lightness: number) => {
     r = c;
     b = x;
   }
-  return {
-    r: Math.round((r + m) * 255),
-    g: Math.round((g + m) * 255),
-    b: Math.round((b + m) * 255),
-  };
+  target.r = Math.round((r + m) * 255);
+  target.g = Math.round((g + m) * 255);
+  target.b = Math.round((b + m) * 255);
+  return target;
 };
 
 const getAudioDuration = (url: string) =>
@@ -286,21 +308,41 @@ class StableVisualizerLoop {
   private lastFrameTime = 0;
   private targetFps = 60;
   private frameInterval = 1000 / 60;
+  private freqData: Uint8Array | null = null;
+  private timeData: Uint8Array | null = null;
+  private vectorDataL: Uint8Array | null = null;
+  private vectorDataR: Uint8Array | null = null;
+  private pulseRgb = { r: 255, g: 255, b: 255 };
+  private fpsEma = 60;
+  private renderEvery = 1;
+  private lowFpsDuration = 0;
+  private lowFpsThreshold = 32;
+  private lowFpsWindow = 4000;
+  private isMobile = false;
+  private autoDisable: (() => void) | null = null;
 
   constructor(
     visualizerColor: string,
-    visualizerPulse: boolean
+    visualizerPulse: boolean,
+    autoDisable?: () => void
   ) {
     this.visualizerColor = visualizerColor;
     this.visualizerPulse = visualizerPulse;
-    this.dpr = window.devicePixelRatio || 1;
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.isMobile = window.matchMedia("(pointer: coarse)").matches;
+    this.autoDisable = autoDisable ?? null;
   }
 
   setCanvas(canvas: HTMLCanvasElement | null) {
     if (this.canvas === canvas) return;
     this.canvas = canvas;
     if (canvas) {
-      this.ctx = canvas.getContext("2d", { alpha: true, desynchronized: true }) || null;
+      this.ctx =
+        canvas.getContext("2d", {
+          alpha: true,
+          desynchronized: true,
+          antialias: false,
+        }) || null;
       this.resize();
     } else {
       this.ctx = null;
@@ -315,6 +357,7 @@ class StableVisualizerLoop {
     this.analyser = analyser;
     this.vizAnalyserL = vizL;
     this.vizAnalyserR = vizR;
+    this.syncBuffers();
   }
 
   setVizMode(mode: VizMode) {
@@ -325,8 +368,13 @@ class StableVisualizerLoop {
     this.visualizerColor = color;
   }
 
+  getFps() {
+    return this.fpsEma;
+  }
+
   resize() {
     if (!this.canvas) return;
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width * this.dpr));
     const height = Math.max(1, Math.floor(rect.height * this.dpr));
@@ -338,10 +386,36 @@ class StableVisualizerLoop {
     }
   }
 
+  private syncBuffers() {
+    if (this.analyser) {
+      const freqLen = this.analyser.frequencyBinCount;
+      const timeLen = this.analyser.fftSize;
+      if (!this.freqData || this.freqData.length !== freqLen) {
+        this.freqData = new Uint8Array(freqLen);
+      }
+      if (!this.timeData || this.timeData.length !== timeLen) {
+        this.timeData = new Uint8Array(timeLen);
+      }
+    }
+    if (this.vizAnalyserL) {
+      const len = this.vizAnalyserL.fftSize;
+      if (!this.vectorDataL || this.vectorDataL.length !== len) {
+        this.vectorDataL = new Uint8Array(len);
+      }
+    }
+    if (this.vizAnalyserR) {
+      const len = this.vizAnalyserR.fftSize;
+      if (!this.vectorDataR || this.vectorDataR.length !== len) {
+        this.vectorDataR = new Uint8Array(len);
+      }
+    }
+  }
+
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
     this.lastFrameTime = performance.now();
+    this.lowFpsDuration = 0;
     this.loop();
   }
 
@@ -368,12 +442,39 @@ class StableVisualizerLoop {
     this.lastFrameTime = now - (elapsed % this.frameInterval);
     this.frameCount++;
 
-    this.render();
+    const instantFps = elapsed > 0 ? 1000 / elapsed : 60;
+    this.fpsEma = this.fpsEma * 0.9 + instantFps * 0.1;
+    if (this.fpsEma < this.lowFpsThreshold) {
+      this.lowFpsDuration += elapsed;
+    } else {
+      this.lowFpsDuration = 0;
+    }
+
+    if (this.lowFpsDuration > this.lowFpsWindow) {
+      this.stop();
+      this.autoDisable?.();
+      return;
+    }
+
+    this.renderEvery = this.fpsEma < 30 ? 3 : this.fpsEma < 45 ? 2 : 1;
+
+    this.renderCritical();
+    if (this.frameCount % this.renderEvery === 0) {
+      this.renderBackground();
+    }
 
     this.rafId = requestAnimationFrame(this.loop);
   };
 
-  private render() {
+  private renderCritical() {
+    if (!this.ctx || !this.canvas) return;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w === 0 || h === 0) return;
+    this.ctx.clearRect(0, 0, w, h);
+  }
+
+  private renderBackground() {
     if (!this.ctx || !this.canvas) return;
 
     const w = this.canvas.width;
@@ -381,25 +482,30 @@ class StableVisualizerLoop {
     if (w === 0 || h === 0) return;
 
     const ctx = this.ctx;
-    ctx.clearRect(0, 0, w, h);
-
     if (!this.analyser) return;
 
     const len = this.analyser.frequencyBinCount;
-    const data = new Uint8Array(len);
+    const data = this.freqData;
+    if (!data || data.length !== len) {
+      this.syncBuffers();
+    }
+    if (!this.freqData) return;
+
     const now = performance.now() / 1000;
-    const pulseColor = this.visualizerPulse
-      ? hslToRgb(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1))
-      : null;
-    const getColor = (alpha: number) =>
-      pulseColor
-        ? `rgba(${pulseColor.r},${pulseColor.g},${pulseColor.b},${alpha})`
-        : `rgba(${this.visualizerColor},${alpha})`;
+    let fillColor = "";
+    if (this.visualizerPulse) {
+      const pulse = hslToRgbMutable(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1), this.pulseRgb);
+      fillColor = `rgba(${pulse.r},${pulse.g},${pulse.b},`;
+    } else {
+      fillColor = `rgba(${this.visualizerColor},`;
+    }
 
     try {
       if (this.vizMode === "spectrum") {
-        this.analyser.getByteFrequencyData(data);
-        const barCount = Math.max(24, Math.floor(w / (10 * this.dpr)));
+        this.analyser.getByteFrequencyData(this.freqData);
+        const mobileFactor = this.isMobile ? 0.7 : 1;
+        const perfFactor = this.renderEvery > 1 ? 0.7 : 1;
+        const barCount = Math.max(18, Math.floor((w / (12 * this.dpr)) * mobileFactor * perfFactor));
         const minFreq = 20;
         const maxFreq = 20000;
         const logMin = Math.log10(minFreq);
@@ -410,26 +516,27 @@ class StableVisualizerLoop {
           const t = i / (barCount - 1);
           const freq = Math.pow(10, logMin + t * (logMax - logMin));
           const idx = Math.min(len - 1, Math.floor((freq / maxFreq) * len));
-          const amp = data[idx] / 255;
+          const amp = this.freqData[idx] / 255;
           const barHeight = amp * h * 0.9;
           const alpha = Math.max(0.2, amp);
-          ctx.fillStyle = getColor(alpha);
+          ctx.fillStyle = `${fillColor}${alpha})`;
           const x = i * barWidth + 1;
           const y = h - barHeight;
           const bw = Math.max(1, barWidth - 2);
           ctx.fillRect(x, y, bw, barHeight);
         }
       } else if (this.vizMode === "oscilloscope") {
-        this.analyser.getByteTimeDomainData(data);
+        if (!this.timeData) return;
+        this.analyser.getByteTimeDomainData(this.timeData);
 
         ctx.beginPath();
-        ctx.strokeStyle = getColor(0.95);
+        ctx.strokeStyle = `${fillColor}0.95)`;
         ctx.lineWidth = Math.max(1, Math.floor(w / 450));
 
-        const slice = w / len;
+        const slice = w / this.timeData.length;
         let x = 0;
-        for (let i = 0; i < len; i += 1) {
-          const v = data[i] / 128 - 1;
+        for (let i = 0; i < this.timeData.length; i += 1) {
+          const v = this.timeData[i] / 128 - 1;
           const y = h / 2 + v * (h * 0.35);
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
@@ -440,18 +547,18 @@ class StableVisualizerLoop {
         const analyserL = this.vizAnalyserL;
         const analyserR = this.vizAnalyserR;
         if (!analyserL || !analyserR) return;
-        const dataL = new Uint8Array(analyserL.fftSize);
-        const dataR = new Uint8Array(analyserR.fftSize);
-        analyserL.getByteTimeDomainData(dataL);
-        analyserR.getByteTimeDomainData(dataR);
+        if (!this.vectorDataL || !this.vectorDataR) return;
+        analyserL.getByteTimeDomainData(this.vectorDataL);
+        analyserR.getByteTimeDomainData(this.vectorDataR);
 
         ctx.beginPath();
-        ctx.strokeStyle = getColor(0.95);
+        ctx.strokeStyle = `${fillColor}0.95)`;
         ctx.lineWidth = Math.max(1, Math.floor(w / 500));
 
-        for (let i = 0; i < dataL.length; i += 1) {
-          const x = ((dataL[i] / 128 - 1) * 0.45 + 0.5) * w;
-          const y = ((dataR[i] / 128 - 1) * 0.45 + 0.5) * h;
+        const lenVec = Math.min(this.vectorDataL.length, this.vectorDataR.length);
+        for (let i = 0; i < lenVec; i += 1) {
+          const x = ((this.vectorDataL[i] / 128 - 1) * 0.45 + 0.5) * w;
+          const y = ((this.vectorDataR[i] / 128 - 1) * 0.45 + 0.5) * h;
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
@@ -470,6 +577,10 @@ class StableVisualizerLoop {
     this.analyser = null;
     this.vizAnalyserL = null;
     this.vizAnalyserR = null;
+    this.freqData = null;
+    this.timeData = null;
+    this.vectorDataL = null;
+    this.vectorDataR = null;
   }
 }
 
@@ -479,6 +590,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
+  const [visualizerFps, setVisualizerFps] = useState(60);
+  const [visualizerBlocked, setVisualizerBlocked] = useState(false);
   const [activeBand, setActiveBand] = useState<Band>("mid");
   const [eq, setEq] = useState<Record<Band, number>>({ low: 0, mid: 0, high: 0 });
   const [compressor, setCompressor] = useState<CompressorSettings>({
@@ -544,6 +658,68 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   const previousVolumeRef = useRef(1);
   const isInitializedRef = useRef(false);
+  const playbackStateRef = useRef<PlaybackState>("idle");
+  const lastWasPlayingRef = useRef(false);
+  const visualizerToastRef = useRef(false);
+  const resumeStateRef = useRef<ResumeState | null>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(RESUME_STATE_KEY);
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as ResumeState;
+      resumeStateRef.current = parsed;
+      setVolume(clamp(parsed.volume, 0, 1));
+      setIsMuted(parsed.isMuted);
+      previousVolumeRef.current = parsed.volume;
+    } catch (err) {
+      console.warn("Failed to read resume state:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    loadStoredPlaylist()
+      .then(({ items, currentIndex: storedIndex }) => {
+        if (!isMounted || items.length === 0) return;
+        const restored = items.map((item) => {
+          const file = new File([item.file], item.fileName, {
+            type: item.fileType,
+            lastModified: item.lastModified,
+          });
+          const url = URL.createObjectURL(file);
+          const artwork = item.artworkBlob ? URL.createObjectURL(item.artworkBlob) : null;
+          return {
+            id: item.id,
+            file,
+            url,
+            title: item.title,
+            artist: item.artist,
+            album: item.album,
+            artwork,
+            artworkBlob: item.artworkBlob ?? null,
+            duration: item.duration,
+            extension: item.extension,
+          } as PlaylistItem;
+        });
+        setPlaylist(restored);
+        const nextIndex = clamp(storedIndex, 0, Math.max(restored.length - 1, 0));
+        setCurrentIndex(nextIndex);
+        const current = restored[nextIndex];
+        if (current && audioRef.current) {
+          audioRef.current.src = current.url;
+          audioRef.current.load();
+          setTrack(buildTrackState(current));
+          setPlayback("ready");
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to restore playlist:", err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [setPlayback]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -582,6 +758,14 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   // Stable visualizer instance
   const visualizerRef = useRef<StableVisualizerLoop | null>(null);
 
+  const handleVisualizerAutoDisable = useCallback(() => {
+    setVisualizerBlocked(true);
+    if (!visualizerToastRef.current) {
+      visualizerToastRef.current = true;
+      toast.warning("Visualizer paused to keep playback stable.");
+    }
+  }, []);
+
   const ensureAudioCtxResumed = useCallback(async () => {
     if (audioCtxRef.current?.state === "suspended") {
       try {
@@ -592,14 +776,23 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     }
   }, []);
 
+  const setPlayback = useCallback((next: PlaybackState) => {
+    playbackStateRef.current = next;
+    setPlaybackState(next);
+  }, []);
+
   // Initialize visualizer loop once
   useEffect(() => {
-    visualizerRef.current = new StableVisualizerLoop(visualizerColor, visualizerPulse);
+    visualizerRef.current = new StableVisualizerLoop(
+      visualizerColor,
+      visualizerPulse,
+      handleVisualizerAutoDisable
+    );
     return () => {
       visualizerRef.current?.destroy();
       visualizerRef.current = null;
     };
-  }, [visualizerColor, visualizerPulse]);
+  }, [handleVisualizerAutoDisable, visualizerColor, visualizerPulse]);
 
   // Update visualizer refs when they change
   useEffect(() => {
@@ -622,13 +815,23 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     visualizerRef.current?.resize();
   }, []);
 
+  useEffect(() => {
+    if (!visualizerActive || visualizerBlocked) return;
+    const id = window.setInterval(() => {
+      const fps = visualizerRef.current?.getFps();
+      if (fps) setVisualizerFps(fps);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [visualizerActive, visualizerBlocked]);
+
   const stopVisualizer = useCallback(() => {
     visualizerRef.current?.stop();
   }, []);
 
   const startVisualizer = useCallback(() => {
+    if (visualizerBlocked) return;
     visualizerRef.current?.start();
-  }, []);
+  }, [visualizerBlocked]);
 
   const applyBandGain = useCallback((band: Band, gainDb: number) => {
     const g = clamp(gainDb, -24, 24);
@@ -724,6 +927,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
       setError(null);
       setIsLoading(true);
+      setPlayback("initializing");
       setCurrentIndex(index);
 
       audioEl.src = item.url;
@@ -731,6 +935,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
       setTrack(buildTrackState(item));
       setIsPlaying(false);
+      setPlayback("ready");
 
       if (opts?.autoplay) {
         try {
@@ -739,10 +944,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           setError(`Playback failed: ${message}`);
+          setPlayback("error");
         }
       }
     },
-    [ensureAudioCtxResumed, playlist]
+    [ensureAudioCtxResumed, playlist, setPlayback]
   );
 
   const playNext = useCallback(
@@ -797,6 +1003,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           let artist = "Unknown Artist";
           let album = "";
           let artwork: string | null = null;
+          let artworkBlob: Blob | null = null;
 
           const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
           if (dashMatch) {
@@ -810,6 +1017,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
             if (metadata.artist) artist = metadata.artist;
             if (metadata.album) album = metadata.album;
             if (metadata.artwork) artwork = metadata.artwork;
+            if (metadata.artworkBlob) artworkBlob = metadata.artworkBlob;
           } catch {
             // ignore
           }
@@ -825,6 +1033,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
             artist,
             album,
             artwork,
+            artworkBlob,
             duration,
             extension,
           };
@@ -843,6 +1052,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           audioEl.src = first.url;
           audioEl.load();
           setTrack(buildTrackState(first));
+          setPlayback("ready");
         }
       } else {
         setIsLoading(false);
@@ -856,6 +1066,8 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const togglePlay = useCallback(async () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
+    if (!audioEl.src) return;
+    if (playbackStateRef.current === "initializing") return;
 
     try {
       await ensureAudioCtxResumed();
@@ -895,9 +1107,28 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     [currentIndex]
   );
 
+  const movePlaylistItem = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    setPlaylist((prev) => {
+      if (fromIndex < 0 || fromIndex >= prev.length) return prev;
+      if (toIndex < 0 || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, item);
+      return next;
+    });
+    setCurrentIndex((prev) => {
+      if (prev === fromIndex) return toIndex;
+      if (fromIndex < prev && toIndex >= prev) return prev - 1;
+      if (fromIndex > prev && toIndex <= prev) return prev + 1;
+      return prev;
+    });
+  }, []);
+
   const updatePlaylistArtwork = useCallback(
     (id: string, file: File) => {
       const artworkUrl = URL.createObjectURL(file);
+      const artworkBlob = file.slice(0, file.size, file.type);
       setPlaylist((prev) => {
         let oldArtwork: string | null = null;
         const next = prev.map((item, index) => {
@@ -906,7 +1137,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           if (index === currentIndex) {
             setTrack((prevTrack) => ({ ...prevTrack, artwork: artworkUrl }));
           }
-          return { ...item, artwork: artworkUrl };
+          return { ...item, artwork: artworkUrl, artworkBlob };
         });
         if (oldArtwork) {
           try {
@@ -935,6 +1166,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
             audioEl.load();
           }
           setIsPlaying(false);
+          setPlayback("idle");
           setCurrentIndex(0);
           setTrack({
             title: "NO_TRACK_LOADED",
@@ -960,6 +1192,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
             audioEl.load();
           }
           setIsPlaying(false);
+          setPlayback("ready");
           setTrack(buildTrackState(nextItem));
         }
         return next;
@@ -986,11 +1219,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const ringSeekTo = useCallback(
     (p: number, commit: boolean) => {
       const audioEl = audioRef.current;
-      if (!track.duration) return;
+      if (!Number.isFinite(track.duration) || track.duration <= 0) return;
       const pct = clamp(p, 0, 1);
       setDragProgress(pct * 100);
       if (!commit) return;
       if (!audioEl) return;
+      if (audioEl.readyState < 1) {
+        setIsLoading(true);
+        return;
+      }
       const newTime = pct * track.duration;
       audioEl.currentTime = newTime;
       setTrack((prev) => ({ ...prev, currentTime: newTime }));
@@ -1045,7 +1282,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const trim = output.bypass ? 0 : output.trim;
     const gainMatch = gainMatchEnabled ? gainMatchOffset : 0;
     const base = isMuted ? 0 : volume;
-    node.gain.value = base * dbToGain(trim + gainMatch);
+    const target = base * dbToGain(trim + gainMatch);
+    const ctx = audioCtxRef.current;
+    if (ctx) {
+      node.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+    } else {
+      node.gain.value = target;
+    }
   }, [gainMatchEnabled, gainMatchOffset, gainRef, isMuted, output.bypass, output.trim, volume]);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
@@ -1417,14 +1660,86 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     }
   }, [exportOfflineWav, exportViaRecorder]);
 
+  const teardownAudio = useCallback(() => {
+    stopVisualizer();
+    const audioEl = audioRef.current;
+    if (audioEl) audioEl.pause();
+
+    const disconnect = (node?: AudioNode | null) => {
+      if (!node) return;
+      try {
+        node.disconnect();
+      } catch {
+        // ignore
+      }
+    };
+
+    disconnect(sourceRef.current);
+    disconnect(analyserRef.current);
+    disconnect(vizAnalyserLRef.current);
+    disconnect(vizAnalyserRRef.current);
+    disconnect(meterRef.current);
+    disconnect(compressorRef.current);
+    disconnect(compressorMakeupRef.current);
+    disconnect(saturationShaperRef.current);
+    disconnect(saturationDryGainRef.current);
+    disconnect(saturationWetGainRef.current);
+    disconnect(saturationSumRef.current);
+    disconnect(stereoSplitRef.current);
+    disconnect(stereoMergeRef.current);
+    disconnect(stereoGainLLRef.current);
+    disconnect(stereoGainRRRef.current);
+    disconnect(stereoGainLRRef.current);
+    disconnect(stereoGainRLRef.current);
+    disconnect(stereoPanRef.current);
+    disconnect(limiterRef.current);
+    disconnect(outputGainRef.current);
+    disconnect(vizSplitRef.current);
+    disconnect(destRef.current);
+
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close().catch((err) => {
+        console.warn("Failed to close AudioContext:", err);
+      });
+    }
+
+    audioCtxRef.current = null;
+    sourceRef.current = null;
+    analyserRef.current = null;
+    meterRef.current = null;
+    compressorRef.current = null;
+    compressorMakeupRef.current = null;
+    saturationShaperRef.current = null;
+    saturationDryGainRef.current = null;
+    saturationWetGainRef.current = null;
+    saturationSumRef.current = null;
+    stereoSplitRef.current = null;
+    stereoMergeRef.current = null;
+    stereoGainLLRef.current = null;
+    stereoGainRRRef.current = null;
+    stereoGainLRRef.current = null;
+    stereoGainRLRef.current = null;
+    stereoPanRef.current = null;
+    limiterRef.current = null;
+    outputGainRef.current = null;
+    vizSplitRef.current = null;
+    vizAnalyserLRef.current = null;
+    vizAnalyserRRef.current = null;
+    destRef.current = null;
+    recorderRef.current = null;
+    isInitializedRef.current = false;
+  }, [stopVisualizer]);
+
   const initAudio = useCallback(async () => {
     try {
       if (isInitializedRef.current) {
         await ensureAudioCtxResumed();
-        if (visualizerActive) startVisualizer();
+        if (visualizerActive && !visualizerBlocked) startVisualizer();
+        setPlayback(audioRef.current?.paused ? "ready" : "playing");
         return true;
       }
 
+      setPlayback("initializing");
       setError(null);
 
       const audioEl = audioRef.current;
@@ -1545,14 +1860,16 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       }
 
       await ensureAudioCtxResumed();
-      if (visualizerActive) startVisualizer();
+      if (visualizerActive && !visualizerBlocked) startVisualizer();
+      setPlayback(audioEl.paused ? "ready" : "playing");
       return true;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(`Failed to initialize audio: ${message}`);
+      setPlayback("error");
       return false;
     }
-  }, [ensureAudioCtxResumed, startVisualizer, visualizerActive]);
+  }, [ensureAudioCtxResumed, setPlayback, startVisualizer, visualizerActive, visualizerBlocked]);
 
   useEffect(() => {
     const audioEl = audioRef.current;
@@ -1571,6 +1888,18 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const onLoaded = () => {
       setIsLoading(false);
       onTime();
+      setPlayback(audioEl.paused ? "ready" : "playing");
+      const resumeState = resumeStateRef.current;
+      if (
+        resumeState &&
+        resumeState.currentIndex === currentIndex &&
+        Number.isFinite(audioEl.duration)
+      ) {
+        const safeTime = clamp(resumeState.currentTime, 0, audioEl.duration);
+        audioEl.currentTime = safeTime;
+        setTrack((prev) => ({ ...prev, currentTime: safeTime }));
+        resumeStateRef.current = null;
+      }
       const item = playlist[currentIndex];
       if (item && Number.isFinite(audioEl.duration)) {
         updatePlaylistItem(item.id, { duration: audioEl.duration });
@@ -1578,15 +1907,27 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     };
 
     const onWaiting = () => setIsLoading(true);
-    const onErr = () => setError(`Audio error: ${audioEl.error?.message || "Unknown error"}`);
+    const onStalled = () => setIsLoading(true);
+    const onSeeking = () => setIsLoading(true);
+    const onSeeked = () => setIsLoading(false);
+    const onErr = () => {
+      setError(`Audio error: ${audioEl.error?.message || "Unknown error"}`);
+      setPlayback("error");
+    };
 
     const onPlay = () => {
       setIsPlaying(true);
+      setIsLoading(false);
+      setPlayback("playing");
       ensureAudioCtxResumed();
     };
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      setIsPlaying(false);
+      setPlayback("paused");
+    };
     const onEnded = () => {
       setIsPlaying(false);
+      setPlayback("paused");
       if (playlist.length > 1 && currentIndex < playlist.length - 1) {
         void loadTrackAt(currentIndex + 1, { autoplay: true });
       }
@@ -1597,7 +1938,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     audioEl.addEventListener("durationchange", onTime);
     audioEl.addEventListener("canplay", onLoaded);
     audioEl.addEventListener("waiting", onWaiting);
+    audioEl.addEventListener("stalled", onStalled);
     audioEl.addEventListener("error", onErr);
+    audioEl.addEventListener("seeking", onSeeking);
+    audioEl.addEventListener("seeked", onSeeked);
     audioEl.addEventListener("play", onPlay);
     audioEl.addEventListener("pause", onPause);
     audioEl.addEventListener("ended", onEnded);
@@ -1608,12 +1952,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       audioEl.removeEventListener("durationchange", onTime);
       audioEl.removeEventListener("canplay", onLoaded);
       audioEl.removeEventListener("waiting", onWaiting);
+      audioEl.removeEventListener("stalled", onStalled);
       audioEl.removeEventListener("error", onErr);
+      audioEl.removeEventListener("seeking", onSeeking);
+      audioEl.removeEventListener("seeked", onSeeked);
       audioEl.removeEventListener("play", onPlay);
       audioEl.removeEventListener("pause", onPause);
       audioEl.removeEventListener("ended", onEnded);
     };
-  }, [currentIndex, ensureAudioCtxResumed, isDragging, loadTrackAt, playlist, updatePlaylistItem]);
+  }, [currentIndex, ensureAudioCtxResumed, isDragging, loadTrackAt, playlist, setPlayback, updatePlaylistItem]);
 
   useEffect(() => {
     const storedA = localStorage.getItem("neon-mastering-preset-A");
@@ -1621,6 +1968,38 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     if (storedA) setPresetA(JSON.parse(storedA) as MasteringPreset);
     if (storedB) setPresetB(JSON.parse(storedB) as MasteringPreset);
   }, []);
+
+  useEffect(() => {
+    if (playlist.length === 0) {
+      clearStoredPlaylist().catch((err) => {
+        console.warn("Failed to clear stored playlist:", err);
+      });
+      return;
+    }
+    const id = window.setTimeout(() => {
+      saveStoredPlaylist(playlist, currentIndex).catch((err) => {
+        console.warn("Failed to persist playlist:", err);
+      });
+    }, 800);
+    return () => window.clearTimeout(id);
+  }, [currentIndex, playlist]);
+
+  useEffect(() => {
+    const nextState: ResumeState = {
+      currentIndex,
+      currentTime: track.currentTime,
+      volume,
+      isMuted,
+    };
+    const id = window.setTimeout(() => {
+      try {
+        localStorage.setItem(RESUME_STATE_KEY, JSON.stringify(nextState));
+      } catch (err) {
+        console.warn("Failed to persist resume state:", err);
+      }
+    }, 500);
+    return () => window.clearTimeout(id);
+  }, [currentIndex, isMuted, track.currentTime, volume]);
 
   useEffect(() => {
     const handleResize = () => resizeCanvas();
@@ -1641,7 +2020,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   }, [resizeCanvas]);
 
   useEffect(() => {
-    if (!visualizerActive) {
+    if (!visualizerActive || visualizerBlocked) {
       stopVisualizer();
       return;
     }
@@ -1649,33 +2028,81 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     if (audioCtxRef.current && analyserRef.current) {
       startVisualizer();
     }
-  }, [startVisualizer, stopVisualizer, visualizerActive, vizMode]);
+  }, [startVisualizer, stopVisualizer, visualizerActive, visualizerBlocked, vizMode]);
 
   useEffect(() => {
+    if (!visualizerActive || visualizerBlocked) return;
+    if (!isLoading || !isPlaying) return;
+    const id = window.setTimeout(() => {
+      handleVisualizerAutoDisable();
+    }, 4000);
+    return () => window.clearTimeout(id);
+  }, [handleVisualizerAutoDisable, isLoading, isPlaying, visualizerActive, visualizerBlocked]);
+
+  useEffect(() => {
+    if (!visualizerActive) {
+      setVisualizerBlocked(false);
+      visualizerToastRef.current = false;
+    }
+  }, [visualizerActive]);
+
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+
     const resumeOnInteraction = () => {
       void ensureAudioCtxResumed();
     };
+
+    const pauseForBackground = () => {
+      if (!audioEl.paused) {
+        lastWasPlayingRef.current = true;
+        audioEl.pause();
+      }
+      audioCtxRef.current?.suspend().catch((err) => {
+        console.warn("Failed to suspend AudioContext:", err);
+      });
+    };
+
+    const resumeFromBackground = () => {
+      void ensureAudioCtxResumed();
+      if (lastWasPlayingRef.current) {
+        lastWasPlayingRef.current = false;
+        audioEl.play().catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setError(`Playback resume failed: ${message}`);
+        });
+      }
+    };
+
     const onVisibility = () => {
-      if (!document.hidden) resumeOnInteraction();
+      if (document.hidden) pauseForBackground();
+      else resumeFromBackground();
     };
 
     window.addEventListener("pointerdown", resumeOnInteraction);
     window.addEventListener("keydown", resumeOnInteraction);
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", pauseForBackground);
+    window.addEventListener("pageshow", resumeFromBackground);
+    window.addEventListener("focus", resumeFromBackground);
 
     return () => {
       window.removeEventListener("pointerdown", resumeOnInteraction);
       window.removeEventListener("keydown", resumeOnInteraction);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", pauseForBackground);
+      window.removeEventListener("pageshow", resumeFromBackground);
+      window.removeEventListener("focus", resumeFromBackground);
     };
   }, [ensureAudioCtxResumed]);
 
   useEffect(() => {
     return () => {
-      stopVisualizer();
+      teardownAudio();
       revokePlaylistUrls(playlist);
     };
-  }, [playlist, revokePlaylistUrls, stopVisualizer]);
+  }, [playlist, revokePlaylistUrls, teardownAudio]);
 
   const progressPct = useMemo(() => {
     if (isDragging) return dragProgress;
@@ -1700,6 +2127,8 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     error,
     clearError: () => setError(null),
     isPlaying,
+    playbackState,
+    visualizerFps,
     activeBand,
     setActiveBand,
     eq,
@@ -1750,6 +2179,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     onGraphTouchMove,
     updatePlaylistItem,
     updatePlaylistArtwork,
+    movePlaylistItem,
     removePlaylistItems,
     setCompressor,
     setLimiter,
