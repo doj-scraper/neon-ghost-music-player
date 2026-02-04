@@ -78,11 +78,14 @@ export type PlaylistItem = {
   artist: string;
   album: string;
   artwork: string | null;
+  duration: number;
+  extension: string;
 };
 
 type AudioEngineOptions = {
   visualizerColor: string;
   visualizerActive: boolean;
+  visualizerPulse?: boolean;
 };
 
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
@@ -105,7 +108,7 @@ const buildTrackState = (item: PlaylistItem): TrackState => ({
   artist: item.artist,
   album: item.album,
   artwork: item.artwork,
-  duration: 0,
+  duration: item.duration,
   currentTime: 0,
 });
 
@@ -136,6 +139,62 @@ const parseID3Tags = async (file: File): Promise<{ title?: string; artist?: stri
     return {};
   }
 };
+
+const hslToRgb = (hue: number, saturation: number, lightness: number) => {
+  const h = ((hue % 360) + 360) % 360;
+  const s = clamp(saturation, 0, 1);
+  const l = clamp(lightness, 0, 1);
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (h < 60) {
+    r = c;
+    g = x;
+  } else if (h < 120) {
+    r = x;
+    g = c;
+  } else if (h < 180) {
+    g = c;
+    b = x;
+  } else if (h < 240) {
+    g = x;
+    b = c;
+  } else if (h < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
+  };
+};
+
+const getAudioDuration = (url: string) =>
+  new Promise<number>((resolve) => {
+    const audio = new Audio();
+    const cleanup = () => {
+      audio.removeAttribute("src");
+      audio.load();
+    };
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      cleanup();
+      resolve(duration);
+    };
+    audio.onerror = () => {
+      cleanup();
+      resolve(0);
+    };
+    audio.src = url;
+  });
 
 const audioBufferToWav = (buffer: AudioBuffer) => {
   const numChannels = buffer.numberOfChannels;
@@ -210,7 +269,7 @@ const applyGainToBuffer = (buffer: AudioBuffer, gain: number) => {
   }
 };
 
-export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngineOptions) => {
+export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPulse = false }: AudioEngineOptions) => {
   const [vizMode, setVizMode] = useState<VizMode>("spectrum");
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -366,6 +425,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
       if (!analyser) return;
       const len = analyser.frequencyBinCount;
       const data = new Uint8Array(len);
+      const now = performance.now() / 1000;
+      const pulseColor = visualizerPulse ? hslToRgb(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1)) : null;
+      const getColor = (alpha: number) =>
+        pulseColor ? `rgba(${pulseColor.r},${pulseColor.g},${pulseColor.b},${alpha})` : `rgba(${visualizerColor},${alpha})`;
 
       if (vizMode === "spectrum") {
         analyser.getByteFrequencyData(data);
@@ -383,14 +446,14 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
           const amp = data[idx] / 255;
           const barHeight = amp * h;
           const alpha = Math.max(0.2, amp);
-          ctx.fillStyle = `rgba(${visualizerColor},${alpha})`;
+          ctx.fillStyle = getColor(alpha);
           ctx.fillRect(i * barWidth + 1, h - barHeight, Math.max(1, barWidth - 2), barHeight);
         }
       } else if (vizMode === "oscilloscope") {
         analyser.getByteTimeDomainData(data);
 
         ctx.beginPath();
-        ctx.strokeStyle = `rgba(${visualizerColor},0.95)`;
+        ctx.strokeStyle = getColor(0.95);
         ctx.lineWidth = Math.max(1, Math.floor(w / 450));
 
         const slice = w / len;
@@ -413,7 +476,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
         analyserR.getByteTimeDomainData(dataR);
 
         ctx.beginPath();
-        ctx.strokeStyle = `rgba(${visualizerColor},0.95)`;
+        ctx.strokeStyle = getColor(0.95);
         ctx.lineWidth = Math.max(1, Math.floor(w / 500));
 
         for (let i = 0; i < dataL.length; i += 1) {
@@ -427,7 +490,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
     };
 
     loop();
-  }, [resizeCanvas, stopVisualizer, visualizerColor, vizMode]);
+  }, [resizeCanvas, stopVisualizer, visualizerColor, visualizerPulse, vizMode]);
 
   const applyBandGain = useCallback((band: Band, gainDb: number) => {
     const g = clamp(gainDb, -24, 24);
@@ -572,7 +635,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
     void playNext({ autoplay: true });
   }, [playNext]);
 
-  const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>, mode: "replace" | "append" = "replace") => {
     const files = Array.from(e.target.files ?? []);
     const audioEl = audioRef.current;
     if (files.length === 0 || !audioEl) return;
@@ -580,54 +643,70 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
     setError(null);
     setIsLoading(true);
 
-    setIsPlaying(false);
-    setCurrentIndex(0);
-
-    revokePlaylistUrls(playlist);
-
-    const nextItems: PlaylistItem[] = [];
-    for (const file of files) {
-      const url = URL.createObjectURL(file);
-
-      let title = file.name.replace(/\.[^/.]+$/, "");
-      let artist = "Unknown Artist";
-      let album = "";
-      let artwork: string | null = null;
-
-      const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-      if (dashMatch) {
-        artist = dashMatch[1].trim();
-        title = dashMatch[2].trim();
-      }
-
-      try {
-        const metadata = await parseID3Tags(file);
-        if (metadata.title) title = metadata.title;
-        if (metadata.artist) artist = metadata.artist;
-        if (metadata.album) album = metadata.album;
-        if (metadata.artwork) artwork = metadata.artwork;
-      } catch {
-        // ignore
-      }
-
-      nextItems.push({
-        id: `${file.name}-${file.size}-${file.lastModified}`,
-        file,
-        url,
-        title,
-        artist,
-        album,
-        artwork,
-      });
+    const shouldReplace = mode === "replace";
+    if (shouldReplace) {
+      setIsPlaying(false);
+      setCurrentIndex(0);
+      revokePlaylistUrls(playlist);
     }
 
-    setPlaylist(nextItems);
+    const nextItems = await Promise.all(
+      files.map(async (file) => {
+        const url = URL.createObjectURL(file);
 
-    const first = nextItems[0];
-    if (first) {
-      audioEl.src = first.url;
-      audioEl.load();
-      setTrack(buildTrackState(first));
+        let title = file.name.replace(/\.[^/.]+$/, "");
+        let artist = "Unknown Artist";
+        let album = "";
+        let artwork: string | null = null;
+
+        const dashMatch = title.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+        if (dashMatch) {
+          artist = dashMatch[1].trim();
+          title = dashMatch[2].trim();
+        }
+
+        try {
+          const metadata = await parseID3Tags(file);
+          if (metadata.title) title = metadata.title;
+          if (metadata.artist) artist = metadata.artist;
+          if (metadata.album) album = metadata.album;
+          if (metadata.artwork) artwork = metadata.artwork;
+        } catch {
+          // ignore
+        }
+
+        const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+        const duration = await getAudioDuration(url);
+
+        return {
+          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+          file,
+          url,
+          title,
+          artist,
+          album,
+          artwork,
+          duration,
+          extension,
+        };
+      })
+    );
+
+    setPlaylist((prev) => {
+      const base = shouldReplace ? [] : prev;
+      return [...base, ...nextItems];
+    });
+
+    const shouldLoadFirst = shouldReplace || playlist.length === 0;
+    if (shouldLoadFirst) {
+      const first = nextItems[0];
+      if (first) {
+        audioEl.src = first.url;
+        audioEl.load();
+        setTrack(buildTrackState(first));
+      }
+    } else {
+      setIsLoading(false);
     }
 
     e.target.value = "";
@@ -649,6 +728,104 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
       setError(`Playback failed: ${message}`);
     }
   }, [ensureAudioCtxResumed]);
+
+  const updatePlaylistItem = useCallback(
+    (id: string, updates: Partial<PlaylistItem>) => {
+      setPlaylist((prev) => {
+        let updated: PlaylistItem | null = null;
+        const next = prev.map((item) => {
+          if (item.id !== id) return item;
+          updated = { ...item, ...updates };
+          return updated;
+        });
+        if (updated && prev[currentIndex]?.id === id) {
+          setTrack((prevTrack) => ({
+            ...prevTrack,
+            title: updated?.title ?? prevTrack.title,
+            artist: updated?.artist ?? prevTrack.artist,
+            album: updated?.album ?? prevTrack.album,
+            artwork: updated?.artwork ?? prevTrack.artwork,
+            duration: updated?.duration ?? prevTrack.duration,
+          }));
+        }
+        return next;
+      });
+    },
+    [currentIndex]
+  );
+
+  const updatePlaylistArtwork = useCallback(
+    (id: string, file: File) => {
+      const artworkUrl = URL.createObjectURL(file);
+      setPlaylist((prev) => {
+        let oldArtwork: string | null = null;
+        const next = prev.map((item, index) => {
+          if (item.id !== id) return item;
+          oldArtwork = item.artwork;
+          if (index === currentIndex) {
+            setTrack((prevTrack) => ({ ...prevTrack, artwork: artworkUrl }));
+          }
+          return { ...item, artwork: artworkUrl };
+        });
+        if (oldArtwork) {
+          try {
+            URL.revokeObjectURL(oldArtwork);
+          } catch {
+            // ignore
+          }
+        }
+        return next;
+      });
+    },
+    [currentIndex]
+  );
+
+  const removePlaylistItems = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      const audioEl = audioRef.current;
+      setPlaylist((prev) => {
+        const next = prev.filter((item) => !ids.includes(item.id));
+        revokePlaylistUrls(prev.filter((item) => ids.includes(item.id)));
+        if (!next.length) {
+          if (audioEl) {
+            audioEl.pause();
+            audioEl.removeAttribute("src");
+            audioEl.load();
+          }
+          setIsPlaying(false);
+          setCurrentIndex(0);
+          setTrack({
+            title: "NO_TRACK_LOADED",
+            artist: "NEON_SKY_OS",
+            album: "",
+            artwork: null,
+            duration: 0,
+            currentTime: 0,
+          });
+          return next;
+        }
+
+        const removedBefore = prev.slice(0, currentIndex).filter((item) => ids.includes(item.id)).length;
+        let nextIndex = currentIndex - removedBefore;
+        nextIndex = clamp(nextIndex, 0, next.length - 1);
+        setCurrentIndex(nextIndex);
+
+        const nextItem = next[nextIndex];
+        if (nextItem && ids.includes(prev[currentIndex]?.id ?? "")) {
+          if (audioEl) {
+            audioEl.pause();
+            audioEl.src = nextItem.url;
+            audioEl.load();
+          }
+          setIsPlaying(false);
+          setTrack(buildTrackState(nextItem));
+        }
+        return next;
+      });
+    },
+    [currentIndex, revokePlaylistUrls]
+  );
 
   const calcRingProgress = useCallback((clientX: number, clientY: number) => {
     const el = seekRingRef.current;
@@ -1238,6 +1415,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
     const onLoaded = () => {
       setIsLoading(false);
       onTime();
+      const item = playlist[currentIndex];
+      if (item && Number.isFinite(audioEl.duration)) {
+        updatePlaylistItem(item.id, { duration: audioEl.duration });
+      }
     };
 
     const onWaiting = () => setIsLoading(true);
@@ -1276,7 +1457,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
       audioEl.removeEventListener("pause", onPause);
       audioEl.removeEventListener("ended", onEnded);
     };
-  }, [currentIndex, ensureAudioCtxResumed, isDragging, loadTrackAt, playlist.length]);
+  }, [currentIndex, ensureAudioCtxResumed, isDragging, loadTrackAt, playlist, updatePlaylistItem]);
 
   useEffect(() => {
     const storedA = localStorage.getItem("neon-mastering-preset-A");
@@ -1411,6 +1592,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive }: AudioEngin
     onGraphMouseDown,
     onGraphTouchStart,
     onGraphTouchMove,
+    updatePlaylistItem,
+    updatePlaylistArtwork,
+    removePlaylistItems,
     setCompressor,
     setLimiter,
     setSaturation,
