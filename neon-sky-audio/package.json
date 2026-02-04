@@ -11,7 +11,8 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke-test": "bash scripts/smoke-test.sh"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { useGlobalErrorCapture } from "./hooks/useGlobalErrorCapture";
 import Home from "./pages/Home";
 
 function Router() {
@@ -17,6 +18,8 @@ function Router() {
 }
 
 function App() {
+  useGlobalErrorCapture();
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">

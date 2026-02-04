@@ -8,6 +8,9 @@ Neon Sky Audio is a single-page music player experience built with React, Vite, 
 - Tailwind CSS styling and Radix UI primitives.
 - Express production server that serves the `dist/` build and handles client-side routing.
 - Optional analytics configuration via `VITE_*` environment variables.
+- Playback state machine with DOM-truth synchronization and iOS lifecycle guards.
+- Visualizer stability controls with adaptive frame budgeting and auto-disable fallback.
+- Resume state for last track time + volume, persistent queue storage, and keyboard shortcuts for transport.
 
 ## Tech stack
 
@@ -59,6 +62,28 @@ npm run typecheck
 npm run build
 ```
 
+### Smoke test
+
+Use the scripted checklist for a quick manual pass:
+
+```bash
+npm run smoke-test
+```
+
+## Stability checklist
+
+Use this before shipping or after large changes:
+
+- [ ] Error boundary renders on crash and recovery reloads successfully.
+- [ ] Global `error` + `unhandledrejection` listeners capture crashes.
+- [ ] Playback state reflects `audio.paused`/`ended` events (UI never lies).
+- [ ] Seek/skip works after buffering or duration changes.
+- [ ] Background/return on iOS pauses and resumes without zombie audio.
+- [ ] Visualizer adapts under load and auto-disables if FPS collapses.
+- [ ] No per-frame allocations in visualizer hot paths (buffers reused).
+- [ ] AudioContext only created/resumed on user gesture.
+- [ ] App runs 10+ minutes without memory or FPS regression.
+
 ## Deployment
 
 ### Vercel (static + SPA routing)
@@ -81,6 +106,15 @@ Railway can run the Express server for production traffic.
    - **Start Command:** `npm start`
 3. Ensure `NODE_ENV=production` is set (Railway defaults to this in most templates).
 4. Railway will inject the `PORT` environment variable; the server reads it automatically.
+
+## PWA
+
+The app ships with a manifest + service worker for an offline-first shell. After one visit, core UI assets are cached for offline access, while audio files remain user-controlled.
+
+### Install prompts
+
+- **Desktop/Android:** use the "Install" prompt when offered.
+- **iOS Safari:** use Share → "Add to Home Screen" (install panel appears in the Suite view).
 
 ## Environment variables
 

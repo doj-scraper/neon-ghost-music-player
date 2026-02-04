@@ -24,6 +24,8 @@ import type React from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Disc,
   Download,
   ImagePlus,
@@ -49,8 +51,8 @@ import {
 import { useAudioEngine, type Band, type Phase, type VizMode } from "../hooks/useAudioEngine";
 
 const NEON = {
-  hex: "#bc13fe",
-  rgba: "188,19,254",
+  hex: "#D4AF37",
+  rgba: "212,175,55",
 } as const;
 
 const cx = (...parts: Array<string | false | undefined | null>) => parts.filter(Boolean).join(" ");
@@ -82,6 +84,11 @@ const formatDb = (value: number, digits = 1) => {
 const toDb = (gain: number) => 20 * Math.log10(Math.max(gain, 0.000001));
 const clampValue = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
 // Visualizer mode icons
 const vizModeIcons: Record<VizMode, React.ReactNode> = {
   spectrum: <Activity size={12} />,
@@ -96,8 +103,12 @@ export default function Home() {
   const [queueOpen, setQueueOpen] = useState(false);
   const [queueSearch, setQueueSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showFps, setShowFps] = useState(false);
+  const [disableVisualizer, setDisableVisualizer] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const presetInputRef = useRef<HTMLInputElement | null>(null);
   const addFileInputRef = useRef<HTMLInputElement | null>(null);
+  const isDev = import.meta.env.DEV;
 
   const {
     vizMode,
@@ -107,6 +118,8 @@ export default function Home() {
     error,
     clearError,
     isPlaying,
+    playbackState,
+    visualizerFps,
     activeBand,
     setActiveBand,
     eq,
@@ -151,6 +164,7 @@ export default function Home() {
     onGraphTouchMove,
     updatePlaylistItem,
     updatePlaylistArtwork,
+    movePlaylistItem,
     removePlaylistItems,
     presetA,
     presetB,
@@ -170,13 +184,59 @@ export default function Home() {
     recallPresetSlot,
     exportPresetJson,
     importPresetJson,
-  } = useAudioEngine({ visualizerColor: NEON.rgba, visualizerActive: phase === "player", visualizerPulse: true });
+  } = useAudioEngine({
+    visualizerColor: NEON.rgba,
+    visualizerActive: phase === "player" && !disableVisualizer,
+    visualizerPulse: true,
+  });
 
   // -------- Phase timing --------
   useEffect(() => {
     const t = window.setTimeout(() => setPhase("boot"), 2000);
     return () => window.clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    const handleInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  };
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        void togglePlay();
+      }
+      if (event.code === "ArrowRight") {
+        event.preventDefault();
+        const audioEl = audioRef.current;
+        if (!audioEl || !Number.isFinite(audioEl.duration)) return;
+        audioEl.currentTime = clampValue(audioEl.currentTime + 5, 0, audioEl.duration);
+      }
+      if (event.code === "ArrowLeft") {
+        event.preventDefault();
+        const audioEl = audioRef.current;
+        if (!audioEl || !Number.isFinite(audioEl.duration)) return;
+        audioEl.currentTime = clampValue(audioEl.currentTime - 5, 0, audioEl.duration);
+      }
+    };
+
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [audioRef, togglePlay]);
 
   const handleInit = async () => {
     const ok = await initAudio();
@@ -202,9 +262,9 @@ export default function Home() {
   // -------- Styles --------
   const bgStyle = useMemo(
     () => ({
-      background: `radial-gradient(ellipse at 30% 20%, rgba(188, 19, 254, 0.15) 0%, transparent 50%),
-                   radial-gradient(ellipse at 70% 80%, rgba(0, 240, 255, 0.1) 0%, transparent 50%),
-                   radial-gradient(circle at 50% 50%, ${NEON.hex}, #6d28d9, #1a0b2e, #050505)`,
+      background: `radial-gradient(ellipse at 30% 20%, rgba(212, 175, 55, 0.12) 0%, transparent 55%),
+                   radial-gradient(ellipse at 70% 80%, rgba(245, 215, 110, 0.08) 0%, transparent 60%),
+                   radial-gradient(circle at 50% 50%, #1b1b1f, #0b0b0d, #070708)`,
       backgroundSize: "200% 200%, 200% 200%, 400% 400%",
     }),
     []
@@ -260,11 +320,25 @@ export default function Home() {
 
   // -------- Render --------
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-black text-white font-mono selection:bg-cyan-500 selection:text-black relative overflow-hidden">
+    <div className="min-h-screen min-h-[100dvh] bg-black text-white font-mono selection:bg-[#D4AF37] selection:text-black relative overflow-hidden">
       {/* Persistent elements (never unmount) */}
       <audio ref={audioRef} className="hidden" playsInline crossOrigin="anonymous" />
-      <input ref={fileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFile(e, "replace")} />
-      <input ref={addFileInputRef} type="file" className="hidden" multiple onChange={(e) => handleFile(e, "append")} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        accept="audio/*"
+        onChange={(e) => handleFile(e, "replace")}
+      />
+      <input
+        ref={addFileInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        accept="audio/*"
+        onChange={(e) => handleFile(e, "append")}
+      />
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
       {/* Animated Background */}
@@ -272,6 +346,12 @@ export default function Home() {
         <div className="absolute inset-0 animate-tie-dye" style={bgStyle} />
         <div className="absolute inset-0 backdrop-blur-[120px]" />
       </div>
+
+      {isDev && showFps && (
+        <div className="fixed top-4 right-4 z-[70] rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-white/70">
+          FPS {Math.round(visualizerFps)}
+        </div>
+      )}
 
       {/* Grid Overlay */}
       <div 
@@ -304,17 +384,17 @@ export default function Home() {
       {/* SPLASH */}
       {phase === "splash" && (
         <div className="fixed inset-0 bg-black flex items-center justify-center z-50 overflow-hidden px-4">
-          <div className="absolute inset-0 bg-gradient-to-tr from-purple-900/30 via-black to-fuchsia-900/20" />
+          <div className="absolute inset-0 bg-gradient-to-tr from-[#1b1b1f]/70 via-black to-[#3a2e10]/40" />
           <div className="relative flex flex-col items-center animate-scale-in">
             <div className="w-28 h-28 sm:w-36 sm:h-36 mb-8 relative">
               <div className="absolute inset-0 rounded-full animate-pulse-glow" />
               <div className="absolute inset-0 border-4 border-cyan-500/30 rounded-full animate-ping opacity-20" />
               <div className="absolute inset-0 border-t-4 border-r-4 border-cyan-400 rounded-full animate-spin" />
-              <div className="absolute inset-2 border-b-4 border-l-4 border-purple-500/50 rounded-full animate-spin-slow" />
+              <div className="absolute inset-2 border-b-4 border-l-4 border-[#8a6f1f]/50 rounded-full animate-spin-slow" />
               <Disc className="absolute inset-0 m-auto text-white animate-pulse-glow" size={44} />
             </div>
             <h1 className="text-5xl sm:text-7xl font-black tracking-tighter text-white text-center neon-text">NEON SKY</h1>
-            <p className="text-fuchsia-300/60 font-mono tracking-[0.3em] sm:tracking-[0.4em] text-[10px] sm:text-xs mt-3 uppercase text-center">
+            <p className="text-[#f5d76e]/70 font-mono tracking-[0.3em] sm:tracking-[0.4em] text-[10px] sm:text-xs mt-3 uppercase text-center">
               Mastering Suite v4.5
             </p>
             <div className="mt-8 flex gap-2">
@@ -561,7 +641,7 @@ export default function Home() {
               {isLoading && (
                 <div className="flex items-center gap-2 text-[10px] text-white/50 tracking-[0.25em] uppercase">
                   <div className="w-4 h-4 border-2 border-white/20 border-t-cyan-400 rounded-full animate-spin" />
-                  <span>Loading…</span>
+                  <span>{isPlaying ? "Buffering…" : "Loading…"}</span>
                 </div>
               )}
 
@@ -756,6 +836,28 @@ export default function Home() {
                             </div>
                             <div className="flex flex-col gap-1.5">
                               <button
+                                onClick={() => movePlaylistItem(playlistIndex, playlistIndex - 1)}
+                                disabled={playlistIndex === 0}
+                                className={cx(
+                                  "w-8 h-8 rounded-xl btn-glass flex items-center justify-center active:scale-90",
+                                  playlistIndex === 0 && "opacity-40 cursor-not-allowed"
+                                )}
+                                aria-label={`Move ${it.title} up`}
+                              >
+                                <ChevronUp size={12} />
+                              </button>
+                              <button
+                                onClick={() => movePlaylistItem(playlistIndex, playlistIndex + 1)}
+                                disabled={playlistIndex === playlist.length - 1}
+                                className={cx(
+                                  "w-8 h-8 rounded-xl btn-glass flex items-center justify-center active:scale-90",
+                                  playlistIndex === playlist.length - 1 && "opacity-40 cursor-not-allowed"
+                                )}
+                                aria-label={`Move ${it.title} down`}
+                              >
+                                <ChevronDown size={12} />
+                              </button>
+                              <button
                                 onClick={() => {
                                   setQueueOpen(false);
                                   void loadTrackAt(playlistIndex, { autoplay: true });
@@ -873,6 +975,50 @@ export default function Home() {
                       />
                     </div>
                   </div>
+
+                  {isDev && (
+                    <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
+                      <label className="text-[10px] text-cyan-400 uppercase tracking-[0.3em] font-bold">Diagnostics</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setShowFps(!showFps)}
+                          className={cx(
+                            "py-2 rounded-xl border text-[9px] tracking-[0.25em] uppercase transition-all active:scale-95",
+                            showFps ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
+                          )}
+                        >
+                          FPS {showFps ? "On" : "Off"}
+                        </button>
+                        <button
+                          onClick={() => setDisableVisualizer(!disableVisualizer)}
+                          className={cx(
+                            "py-2 rounded-xl border text-[9px] tracking-[0.25em] uppercase transition-all active:scale-95",
+                            disableVisualizer ? "border-cyan-500/60 text-cyan-200 bg-cyan-500/10 neon-glow-sm" : "border-white/10 text-white/50 bg-white/5"
+                          )}
+                        >
+                          Viz {disableVisualizer ? "Off" : "On"}
+                        </button>
+                      </div>
+                      <div className="text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                        Playback: <span className="text-white/70">{playbackState}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {installPrompt && (
+                    <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-3">
+                      <label className="text-[10px] text-cyan-400 uppercase tracking-[0.3em] font-bold">Install</label>
+                      <button
+                        onClick={handleInstall}
+                        className="w-full py-3 rounded-xl btn-primary text-black text-[10px] tracking-[0.25em] uppercase"
+                      >
+                        Add to Home Screen
+                      </button>
+                      <p className="text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                        iOS: Share → Add to Home Screen
+                      </p>
+                    </div>
+                  )}
 
                   {/* Presets Panel */}
                   <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
