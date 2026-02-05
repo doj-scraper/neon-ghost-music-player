@@ -2,12 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { parseBlob } from "music-metadata";
 import { toast } from "sonner";
-import { clearStoredPlaylist, loadStoredPlaylist, saveStoredPlaylist } from "@/lib/playlistStore";
+import {
+  clearStoredPlaylist,
+  loadStoredPlaylist,
+  saveStoredPlaylist,
+} from "@/lib/playlistStore";
 
 export type Phase = "splash" | "boot" | "player";
 export type VizMode = "spectrum" | "oscilloscope" | "vectorscope";
 export type Band = "sub" | "low" | "mid" | "high" | "air";
-export type PlaybackState = "idle" | "initializing" | "ready" | "playing" | "paused" | "error";
+export type PlaybackState =
+  | "idle"
+  | "initializing"
+  | "ready"
+  | "playing"
+  | "paused"
+  | "error";
 
 type CompressorSettings = {
   threshold: number;
@@ -108,7 +118,8 @@ const DEFAULT_EQ: Record<Band, number> = {
   air: 0,
 };
 
-const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+const clamp = (n: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, n));
 const dbToGain = (db: number) => Math.pow(10, db / 20);
 
 const createSaturationCurve = (drive: number) => {
@@ -133,13 +144,22 @@ const buildTrackState = (item: PlaylistItem): TrackState => ({
 });
 
 const createAudioContext = () => {
-  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const Ctx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
   return new Ctx();
 };
 
 const parseID3Tags = async (
   file: File
-): Promise<{ title?: string; artist?: string; album?: string; artwork?: string; artworkBlob?: Blob }> => {
+): Promise<{
+  title?: string;
+  artist?: string;
+  album?: string;
+  artwork?: string;
+  artworkBlob?: Blob;
+}> => {
   try {
     const metadata = await parseBlob(file);
     let artworkUrl: string | undefined;
@@ -206,7 +226,7 @@ const hslToRgbMutable = (
 };
 
 const getAudioDuration = (url: string) =>
-  new Promise<number>((resolve) => {
+  new Promise<number>(resolve => {
     const audio = new Audio();
     const cleanup = () => {
       audio.removeAttribute("src");
@@ -262,7 +282,11 @@ const audioBufferToWav = (buffer: AudioBuffer) => {
     for (let channel = 0; channel < numChannels; channel += 1) {
       const sample = buffer.getChannelData(channel)[i];
       const clamped = Math.max(-1, Math.min(1, sample));
-      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+      view.setInt16(
+        offset,
+        clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
+        true
+      );
       offset += 2;
     }
   }
@@ -385,9 +409,12 @@ class StableVisualizerLoop {
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width * this.dpr));
     const height = Math.max(1, Math.floor(rect.height * this.dpr));
-    
+
     // Only resize if dimensions changed significantly
-    if (Math.abs(this.canvas.width - width) > 1 || Math.abs(this.canvas.height - height) > 1) {
+    if (
+      Math.abs(this.canvas.width - width) > 1 ||
+      Math.abs(this.canvas.height - height) > 1
+    ) {
       this.canvas.width = width;
       this.canvas.height = height;
     }
@@ -501,7 +528,12 @@ class StableVisualizerLoop {
     const now = performance.now() / 1000;
     let fillColor = "";
     if (this.visualizerPulse) {
-      const pulse = hslToRgbMutable(now * 40, 0.85, 0.55 + 0.08 * Math.sin(now * 2.1), this.pulseRgb);
+      const pulse = hslToRgbMutable(
+        now * 40,
+        0.85,
+        0.55 + 0.08 * Math.sin(now * 2.1),
+        this.pulseRgb
+      );
       fillColor = `rgba(${pulse.r},${pulse.g},${pulse.b},`;
     } else {
       fillColor = `rgba(${this.visualizerColor},`;
@@ -512,7 +544,10 @@ class StableVisualizerLoop {
         this.analyser.getByteFrequencyData(this.freqData);
         const mobileFactor = this.isMobile ? 0.7 : 1;
         const perfFactor = this.renderEvery > 1 ? 0.7 : 1;
-        const barCount = Math.max(18, Math.floor((w / (12 * this.dpr)) * mobileFactor * perfFactor));
+        const barCount = Math.max(
+          18,
+          Math.floor((w / (12 * this.dpr)) * mobileFactor * perfFactor)
+        );
         const minFreq = 20;
         const maxFreq = 20000;
         const logMin = Math.log10(minFreq);
@@ -562,7 +597,10 @@ class StableVisualizerLoop {
         ctx.strokeStyle = `${fillColor}0.95)`;
         ctx.lineWidth = Math.max(1, Math.floor(w / 500));
 
-        const lenVec = Math.min(this.vectorDataL.length, this.vectorDataR.length);
+        const lenVec = Math.min(
+          this.vectorDataL.length,
+          this.vectorDataR.length
+        );
         for (let i = 0; i < lenVec; i += 1) {
           const x = ((this.vectorDataL[i] / 128 - 1) * 0.45 + 0.5) * w;
           const y = ((this.vectorDataR[i] / 128 - 1) * 0.45 + 0.5) * h;
@@ -591,7 +629,11 @@ class StableVisualizerLoop {
   }
 }
 
-export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPulse = false }: AudioEngineOptions) => {
+export const useAudioEngine = ({
+  visualizerColor,
+  visualizerActive,
+  visualizerPulse = false,
+}: AudioEngineOptions) => {
   const [vizMode, setVizMode] = useState<VizMode>("spectrum");
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -693,13 +735,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     loadStoredPlaylist()
       .then(({ items, currentIndex: storedIndex }) => {
         if (!isMounted || items.length === 0) return;
-        const restored = items.map((item) => {
+        const restored = items.map(item => {
           const file = new File([item.file], item.fileName, {
             type: item.fileType,
             lastModified: item.lastModified,
           });
           const url = URL.createObjectURL(file);
-          const artwork = item.artworkBlob ? URL.createObjectURL(item.artworkBlob) : null;
+          const artwork = item.artworkBlob
+            ? URL.createObjectURL(item.artworkBlob)
+            : null;
           return {
             id: item.id,
             file,
@@ -714,7 +758,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           } as PlaylistItem;
         });
         setPlaylist(restored);
-        const nextIndex = clamp(storedIndex, 0, Math.max(restored.length - 1, 0));
+        const nextIndex = clamp(
+          storedIndex,
+          0,
+          Math.max(restored.length - 1, 0)
+        );
         setCurrentIndex(nextIndex);
         const current = restored[nextIndex];
         if (current && audioRef.current) {
@@ -724,7 +772,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           setPlayback("ready");
         }
       })
-      .catch((err) => {
+      .catch(err => {
         console.warn("Failed to restore playlist:", err);
       });
     return () => {
@@ -848,7 +896,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const applyBandGain = useCallback((band: Band, gainDb: number) => {
     const g = clamp(gainDb, -24, 24);
     setActiveBand(band);
-    setEq((prev) => ({ ...prev, [band]: g }));
+    setEq(prev => ({ ...prev, [band]: g }));
     const node = filtersRef.current[band];
     if (node) node.gain.value = g;
   }, []);
@@ -863,7 +911,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   }, [eq.air, eq.high, eq.low, eq.mid, eq.sub]);
 
   const resetEq = useCallback(() => {
-    (["sub", "low", "mid", "high", "air"] as Band[]).forEach((band) => applyBandGain(band, 0));
+    (["sub", "low", "mid", "high", "air"] as Band[]).forEach(band =>
+      applyBandGain(band, 0)
+    );
   }, [applyBandGain]);
 
   const handleGraphDrag = useCallback(
@@ -995,9 +1045,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     void playNext({ autoplay: true });
   }, [playNext]);
 
-  const handleFile = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>, mode: "replace" | "append" = "replace") => {
-      const files = Array.from(e.target.files ?? []);
+  const addFilesToPlaylist = useCallback(
+    async (incomingFiles: File[], mode: "replace" | "append" = "replace") => {
+      const files = incomingFiles;
       const audioEl = audioRef.current;
       if (files.length === 0 || !audioEl) return;
 
@@ -1012,7 +1062,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       }
 
       const nextItems = await Promise.all(
-        files.map(async (file) => {
+        files.map(async file => {
           const url = URL.createObjectURL(file);
 
           let title = file.name.replace(/\.[^/.]+$/, "");
@@ -1056,7 +1106,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         })
       );
 
-      setPlaylist((prev) => {
+      setPlaylist(prev => {
         const base = shouldReplace ? [] : prev;
         return [...base, ...nextItems];
       });
@@ -1073,10 +1123,20 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       } else {
         setIsLoading(false);
       }
-
-      e.target.value = "";
     },
     [playlist, revokePlaylistUrls]
+  );
+
+  const handleFile = useCallback(
+    async (
+      e: React.ChangeEvent<HTMLInputElement>,
+      mode: "replace" | "append" = "replace"
+    ) => {
+      const files = Array.from(e.target.files ?? []);
+      await addFilesToPlaylist(files, mode);
+      e.target.value = "";
+    },
+    [addFilesToPlaylist]
   );
 
   const togglePlay = useCallback(async () => {
@@ -1100,15 +1160,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   const updatePlaylistItem = useCallback(
     (id: string, updates: Partial<PlaylistItem>) => {
-      setPlaylist((prev) => {
+      setPlaylist(prev => {
         let updated: PlaylistItem | null = null;
-        const next = prev.map((item) => {
+        const next = prev.map(item => {
           if (item.id !== id) return item;
           updated = { ...item, ...updates };
           return updated;
         });
         if (updated && prev[currentIndex]?.id === id) {
-          setTrack((prevTrack) => ({
+          setTrack(prevTrack => ({
             ...prevTrack,
             title: updated?.title ?? prevTrack.title,
             artist: updated?.artist ?? prevTrack.artist,
@@ -1125,7 +1185,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   const movePlaylistItem = useCallback((fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
-    setPlaylist((prev) => {
+    setPlaylist(prev => {
       if (fromIndex < 0 || fromIndex >= prev.length) return prev;
       if (toIndex < 0 || toIndex >= prev.length) return prev;
       const next = [...prev];
@@ -1133,7 +1193,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       next.splice(toIndex, 0, item);
       return next;
     });
-    setCurrentIndex((prev) => {
+    setCurrentIndex(prev => {
       if (prev === fromIndex) return toIndex;
       if (fromIndex < prev && toIndex >= prev) return prev - 1;
       if (fromIndex > prev && toIndex <= prev) return prev + 1;
@@ -1145,13 +1205,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     (id: string, file: File) => {
       const artworkUrl = URL.createObjectURL(file);
       const artworkBlob = file.slice(0, file.size, file.type);
-      setPlaylist((prev) => {
+      setPlaylist(prev => {
         let oldArtwork: string | null = null;
         const next = prev.map((item, index) => {
           if (item.id !== id) return item;
           oldArtwork = item.artwork;
           if (index === currentIndex) {
-            setTrack((prevTrack) => ({ ...prevTrack, artwork: artworkUrl }));
+            setTrack(prevTrack => ({ ...prevTrack, artwork: artworkUrl }));
           }
           return { ...item, artwork: artworkUrl, artworkBlob };
         });
@@ -1172,9 +1232,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     (ids: string[]) => {
       if (ids.length === 0) return;
       const audioEl = audioRef.current;
-      setPlaylist((prev) => {
-        const next = prev.filter((item) => !ids.includes(item.id));
-        revokePlaylistUrls(prev.filter((item) => ids.includes(item.id)));
+      setPlaylist(prev => {
+        const next = prev.filter(item => !ids.includes(item.id));
+        revokePlaylistUrls(prev.filter(item => ids.includes(item.id)));
         if (!next.length) {
           if (audioEl) {
             audioEl.pause();
@@ -1195,7 +1255,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
           return next;
         }
 
-        const removedBefore = prev.slice(0, currentIndex).filter((item) => ids.includes(item.id)).length;
+        const removedBefore = prev
+          .slice(0, currentIndex)
+          .filter(item => ids.includes(item.id)).length;
         let nextIndex = currentIndex - removedBefore;
         nextIndex = clamp(nextIndex, 0, next.length - 1);
         setCurrentIndex(nextIndex);
@@ -1246,7 +1308,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       }
       const newTime = pct * track.duration;
       audioEl.currentTime = newTime;
-      setTrack((prev) => ({ ...prev, currentTime: newTime }));
+      setTrack(prev => ({ ...prev, currentTime: newTime }));
     },
     [track.duration]
   );
@@ -1305,7 +1367,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     } else {
       node.gain.value = target;
     }
-  }, [gainMatchEnabled, gainMatchOffset, gainRef, isMuted, output.bypass, output.trim, volume]);
+  }, [
+    gainMatchEnabled,
+    gainMatchOffset,
+    gainRef,
+    isMuted,
+    output.bypass,
+    output.trim,
+    volume,
+  ]);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
     const clampedVolume = clamp(newVolume, 0, 1);
@@ -1315,7 +1385,8 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   const toggleMute = useCallback(() => {
     if (isMuted) {
-      const restoreVolume = previousVolumeRef.current > 0 ? previousVolumeRef.current : 1;
+      const restoreVolume =
+        previousVolumeRef.current > 0 ? previousVolumeRef.current : 1;
       handleVolumeChange(restoreVolume);
     } else {
       previousVolumeRef.current = volume;
@@ -1338,7 +1409,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       node.release.value = compressor.release;
     }
     if (compressorMakeupRef.current) {
-      compressorMakeupRef.current.gain.value = dbToGain(compressor.bypass ? 0 : compressor.makeup);
+      compressorMakeupRef.current.gain.value = dbToGain(
+        compressor.bypass ? 0 : compressor.makeup
+      );
     }
   }, [compressor]);
 
@@ -1361,7 +1434,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const rl = stereoGainRLRef.current;
     const pan = stereoPanRef.current;
     if (!ll || !rr || !lr || !rl || !pan) return;
-    const width = stereo.bypass ? 1 : stereo.mono ? 0 : clamp(stereo.width, 0, 2);
+    const width = stereo.bypass
+      ? 1
+      : stereo.mono
+        ? 0
+        : clamp(stereo.width, 0, 2);
     const a = (1 + width) / 2;
     const b = (1 - width) / 2;
     ll.gain.value = a;
@@ -1374,11 +1451,21 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   useEffect(() => {
     const node = limiterRef.current;
     if (!node) return;
-    node.parameters.get("threshold")?.setValueAtTime(limiter.threshold, node.context.currentTime);
-    node.parameters.get("ceiling")?.setValueAtTime(limiter.ceiling, node.context.currentTime);
-    node.parameters.get("release")?.setValueAtTime(limiter.release, node.context.currentTime);
-    node.parameters.get("softClip")?.setValueAtTime(limiter.softClip ? 1 : 0, node.context.currentTime);
-    node.parameters.get("bypass")?.setValueAtTime(limiter.bypass ? 1 : 0, node.context.currentTime);
+    node.parameters
+      .get("threshold")
+      ?.setValueAtTime(limiter.threshold, node.context.currentTime);
+    node.parameters
+      .get("ceiling")
+      ?.setValueAtTime(limiter.ceiling, node.context.currentTime);
+    node.parameters
+      .get("release")
+      ?.setValueAtTime(limiter.release, node.context.currentTime);
+    node.parameters
+      .get("softClip")
+      ?.setValueAtTime(limiter.softClip ? 1 : 0, node.context.currentTime);
+    node.parameters
+      .get("bypass")
+      ?.setValueAtTime(limiter.bypass ? 1 : 0, node.context.currentTime);
   }, [limiter]);
 
   useEffect(() => {
@@ -1413,7 +1500,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       const preset = buildPreset(`Preset ${slot}`);
       if (slot === "A") setPresetA(preset);
       else setPresetB(preset);
-      localStorage.setItem(`neon-mastering-preset-${slot}`, JSON.stringify(preset));
+      localStorage.setItem(
+        `neon-mastering-preset-${slot}`,
+        JSON.stringify(preset)
+      );
     },
     [buildPreset]
   );
@@ -1433,12 +1523,21 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       setActivePresetSlot(slot);
       applyPreset(preset);
     },
-    [activePresetSlot, applyPreset, gainMatchEnabled, meter.lufsIntegrated, presetA, presetB]
+    [
+      activePresetSlot,
+      applyPreset,
+      gainMatchEnabled,
+      meter.lufsIntegrated,
+      presetA,
+      presetB,
+    ]
   );
 
   const exportPresetJson = useCallback(() => {
     const preset = buildPreset(`Preset ${activePresetSlot}`);
-    const blob = new Blob([JSON.stringify(preset, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(preset, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1451,11 +1550,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     async (file: File) => {
       const text = await file.text();
       const parsed = JSON.parse(text) as MasteringPreset;
-      if (!parsed.eq || !parsed.compressor || !parsed.limiter) throw new Error("Invalid preset file.");
+      if (!parsed.eq || !parsed.compressor || !parsed.limiter)
+        throw new Error("Invalid preset file.");
       applyPreset(parsed);
       if (activePresetSlot === "A") setPresetA(parsed);
       else setPresetB(parsed);
-      localStorage.setItem(`neon-mastering-preset-${activePresetSlot}`, JSON.stringify(parsed));
+      localStorage.setItem(
+        `neon-mastering-preset-${activePresetSlot}`,
+        JSON.stringify(parsed)
+      );
     },
     [activePresetSlot, applyPreset]
   );
@@ -1469,8 +1572,14 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const decoded = await decodeContext.decodeAudioData(arrayBuffer.slice(0));
     await decodeContext.close();
 
-    const offlineContext = new OfflineAudioContext(decoded.numberOfChannels, decoded.length, decoded.sampleRate);
-    await offlineContext.audioWorklet.addModule("/worklets/limiter-processor.js");
+    const offlineContext = new OfflineAudioContext(
+      decoded.numberOfChannels,
+      decoded.length,
+      decoded.sampleRate
+    );
+    await offlineContext.audioWorklet.addModule(
+      "/worklets/limiter-processor.js"
+    );
     const source = offlineContext.createBufferSource();
     source.buffer = decoded;
 
@@ -1503,7 +1612,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     air.gain.value = eq.air;
 
     const compressorNode = offlineContext.createDynamicsCompressor();
-    compressorNode.threshold.value = compressor.bypass ? 0 : compressor.threshold;
+    compressorNode.threshold.value = compressor.bypass
+      ? 0
+      : compressor.threshold;
     compressorNode.ratio.value = compressor.bypass ? 1 : compressor.ratio;
     compressorNode.attack.value = compressor.attack;
     compressorNode.release.value = compressor.release;
@@ -1523,7 +1634,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
     const stereoSplit = offlineContext.createChannelSplitter(2);
     const stereoMerge = offlineContext.createChannelMerger(2);
-    const width = stereo.bypass ? 1 : stereo.mono ? 0 : clamp(stereo.width, 0, 2);
+    const width = stereo.bypass
+      ? 1
+      : stereo.mono
+        ? 0
+        : clamp(stereo.width, 0, 2);
     const widthA = (1 + width) / 2;
     const widthB = (1 - width) / 2;
     const gainLL = offlineContext.createGain();
@@ -1537,16 +1652,26 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const pan = offlineContext.createStereoPanner();
     pan.pan.value = stereo.bypass ? 0 : clamp(stereo.pan, -1, 1);
 
-    const limiterNode = new AudioWorkletNode(offlineContext, "limiter-processor", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      outputChannelCount: [decoded.numberOfChannels],
-    });
-    limiterNode.parameters.get("threshold")?.setValueAtTime(limiter.threshold, 0);
+    const limiterNode = new AudioWorkletNode(
+      offlineContext,
+      "limiter-processor",
+      {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [decoded.numberOfChannels],
+      }
+    );
+    limiterNode.parameters
+      .get("threshold")
+      ?.setValueAtTime(limiter.threshold, 0);
     limiterNode.parameters.get("ceiling")?.setValueAtTime(limiter.ceiling, 0);
     limiterNode.parameters.get("release")?.setValueAtTime(limiter.release, 0);
-    limiterNode.parameters.get("softClip")?.setValueAtTime(limiter.softClip ? 1 : 0, 0);
-    limiterNode.parameters.get("bypass")?.setValueAtTime(limiter.bypass ? 1 : 0, 0);
+    limiterNode.parameters
+      .get("softClip")
+      ?.setValueAtTime(limiter.softClip ? 1 : 0, 0);
+    limiterNode.parameters
+      .get("bypass")
+      ?.setValueAtTime(limiter.bypass ? 1 : 0, 0);
 
     const gain = offlineContext.createGain();
     const trim = output.bypass ? 0 : output.trim;
@@ -1662,7 +1787,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       audioEl.currentTime = 0;
       audioEl.addEventListener("ended", handleEnded, { once: true });
       rec.start();
-      audioEl.play().catch((err) => {
+      audioEl.play().catch(err => {
         cleanup();
         reject(err);
       });
@@ -1684,7 +1809,8 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       try {
         await exportViaRecorder();
       } catch (recErr: unknown) {
-        const message = recErr instanceof Error ? recErr.message : String(recErr);
+        const message =
+          recErr instanceof Error ? recErr.message : String(recErr);
         setError(`Export failed: ${message}`);
       }
     } finally {
@@ -1730,7 +1856,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     disconnect(destRef.current);
 
     if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
-      audioCtxRef.current.close().catch((err) => {
+      audioCtxRef.current.close().catch(err => {
         console.warn("Failed to close AudioContext:", err);
       });
     }
@@ -1781,8 +1907,12 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         audioCtxRef.current = createAudioContext();
         await ensureAudioCtxResumed();
 
-        await audioCtxRef.current.audioWorklet.addModule("/worklets/meter-processor.js");
-        await audioCtxRef.current.audioWorklet.addModule("/worklets/limiter-processor.js");
+        await audioCtxRef.current.audioWorklet.addModule(
+          "/worklets/meter-processor.js"
+        );
+        await audioCtxRef.current.audioWorklet.addModule(
+          "/worklets/limiter-processor.js"
+        );
 
         analyserRef.current = audioCtxRef.current.createAnalyser();
         analyserRef.current.fftSize = 1024;
@@ -1793,8 +1923,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         vizAnalyserLRef.current.fftSize = 512;
         vizAnalyserRRef.current.fftSize = 512;
 
-        meterRef.current = new AudioWorkletNode(audioCtxRef.current, "meter-processor");
-        meterRef.current.port.onmessage = (event) => {
+        meterRef.current = new AudioWorkletNode(
+          audioCtxRef.current,
+          "meter-processor"
+        );
+        meterRef.current.port.onmessage = event => {
           if (event.data) setMeter(event.data as MeterState);
         };
 
@@ -1814,11 +1947,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         stereoGainRLRef.current = audioCtxRef.current.createGain();
         stereoPanRef.current = audioCtxRef.current.createStereoPanner();
 
-        limiterRef.current = new AudioWorkletNode(audioCtxRef.current, "limiter-processor", {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          outputChannelCount: [2],
-        });
+        limiterRef.current = new AudioWorkletNode(
+          audioCtxRef.current,
+          "limiter-processor",
+          {
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+            outputChannelCount: [2],
+          }
+        );
 
         outputGainRef.current = audioCtxRef.current.createGain();
 
@@ -1852,7 +1989,8 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
         filtersRef.current = { sub, low, mid, high, air };
 
-        sourceRef.current = audioCtxRef.current.createMediaElementSource(audioEl);
+        sourceRef.current =
+          audioCtxRef.current.createMediaElementSource(audioEl);
         sourceRef.current.connect(sub);
         sub.connect(low);
         low.connect(mid);
@@ -1893,8 +2031,9 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
         if (window.MediaRecorder) {
           recorderRef.current = new MediaRecorder(destRef.current.stream);
-          recorderRef.current.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+          recorderRef.current.ondataavailable = e => {
+            if (e.data && e.data.size > 0)
+              recordedChunksRef.current.push(e.data);
           };
         }
 
@@ -1918,7 +2057,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       setPlayback("error");
       return false;
     }
-  }, [ensureAudioCtxResumed, setPlayback, startVisualizer, visualizerActive, visualizerBlocked]);
+  }, [
+    ensureAudioCtxResumed,
+    setPlayback,
+    startVisualizer,
+    visualizerActive,
+    visualizerBlocked,
+  ]);
 
   useEffect(() => {
     const audioEl = audioRef.current;
@@ -1926,10 +2071,12 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
     const onTime = () => {
       if (!isDragging) {
-        setTrack((prev) => ({
+        setTrack(prev => ({
           ...prev,
           currentTime: audioEl.currentTime || 0,
-          duration: Number.isFinite(audioEl.duration) ? audioEl.duration : prev.duration,
+          duration: Number.isFinite(audioEl.duration)
+            ? audioEl.duration
+            : prev.duration,
         }));
       }
     };
@@ -1946,7 +2093,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       ) {
         const safeTime = clamp(resumeState.currentTime, 0, audioEl.duration);
         audioEl.currentTime = safeTime;
-        setTrack((prev) => ({ ...prev, currentTime: safeTime }));
+        setTrack(prev => ({ ...prev, currentTime: safeTime }));
         resumeStateRef.current = null;
       }
       const item = playlist[currentIndex];
@@ -2009,7 +2156,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       audioEl.removeEventListener("pause", onPause);
       audioEl.removeEventListener("ended", onEnded);
     };
-  }, [currentIndex, ensureAudioCtxResumed, isDragging, loadTrackAt, playlist, setPlayback, updatePlaylistItem]);
+  }, [
+    currentIndex,
+    ensureAudioCtxResumed,
+    isDragging,
+    loadTrackAt,
+    playlist,
+    setPlayback,
+    updatePlaylistItem,
+  ]);
 
   useEffect(() => {
     const storedA = localStorage.getItem("neon-mastering-preset-A");
@@ -2020,13 +2175,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
   useEffect(() => {
     if (playlist.length === 0) {
-      clearStoredPlaylist().catch((err) => {
+      clearStoredPlaylist().catch(err => {
         console.warn("Failed to clear stored playlist:", err);
       });
       return;
     }
     const id = window.setTimeout(() => {
-      saveStoredPlaylist(playlist, currentIndex).catch((err) => {
+      saveStoredPlaylist(playlist, currentIndex).catch(err => {
         console.warn("Failed to persist playlist:", err);
       });
     }, 800);
@@ -2077,7 +2232,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     if (audioCtxRef.current && analyserRef.current) {
       startVisualizer();
     }
-  }, [startVisualizer, stopVisualizer, visualizerActive, visualizerBlocked, vizMode]);
+  }, [
+    startVisualizer,
+    stopVisualizer,
+    visualizerActive,
+    visualizerBlocked,
+    vizMode,
+  ]);
 
   useEffect(() => {
     if (!visualizerActive || visualizerBlocked) return;
@@ -2086,7 +2247,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       handleVisualizerAutoDisable();
     }, 4000);
     return () => window.clearTimeout(id);
-  }, [handleVisualizerAutoDisable, isLoading, isPlaying, visualizerActive, visualizerBlocked]);
+  }, [
+    handleVisualizerAutoDisable,
+    isLoading,
+    isPlaying,
+    visualizerActive,
+    visualizerBlocked,
+  ]);
 
   useEffect(() => {
     if (!visualizerActive) {
@@ -2108,7 +2275,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
         lastWasPlayingRef.current = true;
         audioEl.pause();
       }
-      audioCtxRef.current?.suspend().catch((err) => {
+      audioCtxRef.current?.suspend().catch(err => {
         console.warn("Failed to suspend AudioContext:", err);
       });
     };
@@ -2117,7 +2284,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       void ensureAudioCtxResumed();
       if (lastWasPlayingRef.current) {
         lastWasPlayingRef.current = false;
-        audioEl.play().catch((err) => {
+        audioEl.play().catch(err => {
           const message = err instanceof Error ? err.message : String(err);
           setError(`Playback resume failed: ${message}`);
         });
@@ -2209,6 +2376,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     graphEqRef,
     seekRingRef,
     initAudio,
+    addFilesToPlaylist,
     handleFile,
     togglePlay,
     prevTrack,
