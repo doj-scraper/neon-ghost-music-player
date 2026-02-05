@@ -391,7 +391,7 @@ export default function Home() {
         type="file"
         className="hidden"
         multiple
-        accept="audio/*"
+        accept="*/*"
         onChange={(e) => handleFile(e, "replace")}
       />
       <input
@@ -399,7 +399,7 @@ export default function Home() {
         type="file"
         className="hidden"
         multiple
-        accept="audio/*"
+        accept="*/*"
         onChange={(e) => handleFile(e, "append")}
       />
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
@@ -527,7 +527,7 @@ export default function Home() {
               <Disc className="absolute inset-0 m-auto text-white animate-pulse-glow" size={44} />
             </div>
             <h1 className="text-5xl sm:text-7xl font-black tracking-tighter text-white text-center neon-text">NEON SKY</h1>
-            <p className="text-[#f5d76e]/70 font-mono tracking-[0.3em] sm:tracking-[0.4em] text-[10px] sm:text-xs mt-3 uppercase text-center">
+            <p className="text-[#bc13fe]/70 font-mono tracking-[0.3em] sm:tracking-[0.4em] text-[10px] sm:text-xs mt-3 uppercase text-center">
               Mastering Suite v4.5
             </p>
             <div className="mt-8 flex gap-2">
@@ -767,22 +767,22 @@ export default function Home() {
                   aria-label="Seek ring"
                 >
                   {/* Glow effect */}
-                  <div className="absolute inset-1 rounded-full bg-gradient-to-br from-amber-200/10 via-amber-500/5 to-amber-900/20 shadow-[inset_0_2px_10px_rgba(255,255,255,0.2),inset_0_-8px_14px_rgba(0,0,0,0.5),0_10px_25px_rgba(0,0,0,0.4)]" />
+                  <div className="absolute inset-1 rounded-full bg-gradient-to-br from-[#d4af37]/15 via-[#bc13fe]/10 to-[#47246f]/25 shadow-[inset_0_2px_10px_rgba(255,255,255,0.2),inset_0_-8px_14px_rgba(0,0,0,0.5),0_10px_25px_rgba(0,0,0,0.4)]" />
                   
                   <svg className="absolute inset-0" viewBox="0 0 120 120">
                     <defs>
                       <linearGradient id="scrub-track" x1="0" x2="1" y1="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(255,214,170,0.15)" />
-                        <stop offset="100%" stopColor="rgba(255,120,90,0.35)" />
+                        <stop offset="0%" stopColor="rgba(212,175,55,0.2)" />
+                        <stop offset="100%" stopColor="rgba(188,19,254,0.35)" />
                       </linearGradient>
                       <linearGradient id="scrub-progress" x1="0" x2="1" y1="1" y2="0">
-                        <stop offset="0%" stopColor="rgba(255,159,67,0.95)" />
-                        <stop offset="100%" stopColor="rgba(255,204,102,0.95)" />
+                        <stop offset="0%" stopColor="rgba(212,175,55,0.95)" />
+                        <stop offset="100%" stopColor="rgba(188,19,254,0.95)" />
                       </linearGradient>
                       <radialGradient id="scrub-handle" cx="30%" cy="30%" r="70%">
                         <stop offset="0%" stopColor="rgba(255,255,255,0.98)" />
-                        <stop offset="60%" stopColor="rgba(255,191,115,0.95)" />
-                        <stop offset="100%" stopColor="rgba(178,88,20,0.95)" />
+                        <stop offset="60%" stopColor="rgba(212,175,55,0.95)" />
+                        <stop offset="100%" stopColor="rgba(92,28,140,0.95)" />
                       </radialGradient>
                       <filter id="scrub-shadow" x="-50%" y="-50%" width="200%" height="200%">
                         <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(0,0,0,0.6)" />
@@ -821,7 +821,7 @@ export default function Home() {
                     className={cx(
                       "absolute inset-3 rounded-full flex items-center justify-center transition-all shadow-2xl active:scale-90",
                       canPlay
-                        ? "bg-gradient-to-br from-white via-amber-50 to-amber-200 text-black hover:scale-105 shadow-[0_6px_20px_rgba(255,200,120,0.4)]"
+                        ? "bg-gradient-to-br from-white via-[#f5d76e] to-[#bc13fe] text-black hover:scale-105 shadow-[0_6px_20px_rgba(188,19,254,0.35)]"
                         : "bg-white/20 text-white/60 cursor-not-allowed"
                     )}
                     aria-label={isPlaying ? "Pause" : "Play"}
