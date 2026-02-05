@@ -3,7 +3,7 @@
  * Design: Liquid Neon Glassmorphism
  * - Enhanced frosted glass surfaces with deep blur effects
  * - Luminous neon cyan accents that appear to glow
- * - Animated tie-dye background with continuous hue rotation
+ * - Three.js animated background scenes with pulsing color waves
  * - Monospace typography with wide tracking
  * - Mobile-first responsive design
  * 
@@ -49,6 +49,8 @@ import {
   Radio,
 } from "lucide-react";
 import { useAudioEngine, type Band, type Phase, type VizMode } from "../hooks/useAudioEngine";
+import { ThreeBackground, type BackgroundType } from "../components/ThreeBackground";
+import { useIsMobile } from "../hooks/useMobile";
 
 const NEON = {
   hex: "#D4AF37",
@@ -106,9 +108,17 @@ export default function Home() {
   const [showFps, setShowFps] = useState(false);
   const [disableVisualizer, setDisableVisualizer] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [backgroundSettingsOpen, setBackgroundSettingsOpen] = useState(false);
+  const [cycleBackgrounds, setCycleBackgrounds] = useState(true);
+  const [multiColorPulse, setMultiColorPulse] = useState(true);
+  const [backgroundChoice, setBackgroundChoice] = useState<BackgroundType>("stars");
+  const [backgroundColor, setBackgroundColor] = useState("#d4af37");
+  const [backgroundIndex, setBackgroundIndex] = useState(0);
+  const [compactMode, setCompactMode] = useState(false);
   const presetInputRef = useRef<HTMLInputElement | null>(null);
   const addFileInputRef = useRef<HTMLInputElement | null>(null);
   const isDev = import.meta.env.DEV;
+  const isMobile = useIsMobile();
 
   const {
     vizMode,
@@ -259,16 +269,20 @@ export default function Home() {
     setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => playlist.some((item) => item.id === id))));
   }, [playlist]);
 
-  // -------- Styles --------
-  const bgStyle = useMemo(
-    () => ({
-      background: `radial-gradient(ellipse at 30% 20%, rgba(212, 175, 55, 0.12) 0%, transparent 55%),
-                   radial-gradient(ellipse at 70% 80%, rgba(245, 215, 110, 0.08) 0%, transparent 60%),
-                   radial-gradient(circle at 50% 50%, #1b1b1f, #0b0b0d, #070708)`,
-      backgroundSize: "200% 200%, 200% 200%, 400% 400%",
-    }),
+  const backgroundOptions = useMemo(
+    () => [
+      { id: "stars", label: "Falling Stars" },
+      { id: "snow", label: "Snowfall" },
+      { id: "grid", label: "Engineering Grid" },
+      { id: "orbs", label: "Pulse Orbs" },
+      { id: "circuit", label: "Circuit Bloom" },
+    ],
     []
   );
+  const backgroundType = cycleBackgrounds
+    ? backgroundOptions[backgroundIndex % backgroundOptions.length]?.id ?? "stars"
+    : backgroundChoice;
+  const shouldMultiPulse = multiColorPulse || backgroundType === "grid";
 
   const vizModes: VizMode[] = ["spectrum", "oscilloscope", "vectorscope"];
   const vizIndex = Math.max(0, vizModes.indexOf(vizMode));
@@ -295,6 +309,28 @@ export default function Home() {
     };
   }, [progressPct]);
 
+  const eqBands = useMemo<Band[]>(() => ["sub", "low", "mid", "high", "air"], []);
+  const eqBandPositions = useMemo<Record<Band, number>>(
+    () => ({
+      sub: 0.08,
+      low: 0.26,
+      mid: 0.5,
+      high: 0.74,
+      air: 0.92,
+    }),
+    []
+  );
+  const eqBaseLine = 80;
+  const eqScale = 2.4;
+  const eqActivePath = useMemo(() => {
+    const points = eqBands.map((band) => {
+      const x = eqBandPositions[band] * 100;
+      const y = eqBaseLine - eq[band] * eqScale;
+      return `${x} ${y}`;
+    });
+    return `M 0 ${eqBaseLine} L ${points.join(" L ")} L 100 ${eqBaseLine}`;
+  }, [eq, eqBands, eqBandPositions]);
+
   const toggleSelected = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -317,6 +353,33 @@ export default function Home() {
     removePlaylistItems(Array.from(selectedIds));
     setSelectedIds(new Set());
   };
+
+  const didSetCompactRef = useRef(false);
+  useEffect(() => {
+    if (isMobile && !didSetCompactRef.current) {
+      setCompactMode(true);
+      didSetCompactRef.current = true;
+    }
+  }, [isMobile]);
+
+  const trackChangeRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!cycleBackgrounds || playlist.length === 0) return;
+    if (trackChangeRef.current === null) {
+      trackChangeRef.current = currentIndex;
+      return;
+    }
+    if (trackChangeRef.current !== currentIndex) {
+      setBackgroundIndex((prev) => (prev + 1) % backgroundOptions.length);
+      trackChangeRef.current = currentIndex;
+    }
+  }, [backgroundOptions.length, currentIndex, cycleBackgrounds, playlist.length]);
+
+  useEffect(() => {
+    if (!cycleBackgrounds) return;
+    const selectedIndex = backgroundOptions.findIndex((option) => option.id === backgroundChoice);
+    if (selectedIndex >= 0) setBackgroundIndex(selectedIndex);
+  }, [backgroundChoice, backgroundOptions, cycleBackgrounds]);
 
   // -------- Render --------
   return (
@@ -342,14 +405,84 @@ export default function Home() {
       <input ref={presetInputRef} type="file" className="hidden" accept="application/json" onChange={handlePresetImport} />
 
       {/* Animated Background */}
-      <div className="fixed inset-0 pointer-events-none opacity-40 z-0">
-        <div className="absolute inset-0 animate-tie-dye" style={bgStyle} />
-        <div className="absolute inset-0 backdrop-blur-[120px]" />
-      </div>
+      <ThreeBackground type={backgroundType} color={backgroundColor} multiColorPulse={shouldMultiPulse} />
 
       {isDev && showFps && (
         <div className="fixed top-4 right-4 z-[70] rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-white/70">
           FPS {Math.round(visualizerFps)}
+        </div>
+      )}
+
+      {phase === "player" && (
+        <div className="fixed top-4 right-4 z-[65] flex flex-col items-end gap-2">
+          <button
+            onClick={() => setBackgroundSettingsOpen((prev) => !prev)}
+            className="h-10 w-10 rounded-none border border-white/10 bg-black/60 text-white/70 hover:text-white hover:bg-white/10 transition-all active:scale-95 flex items-center justify-center"
+            aria-label="Background settings"
+          >
+            <Settings size={18} />
+          </button>
+          {backgroundSettingsOpen && (
+            <div className="w-64 border border-white/10 bg-black/70 backdrop-blur-md p-4 text-[10px] uppercase tracking-[0.2em] text-white/70 rounded-none">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-white/80">Background</span>
+                <button
+                  onClick={() => setBackgroundSettingsOpen(false)}
+                  className="text-white/40 hover:text-white transition"
+                  aria-label="Close background settings"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <label className="flex items-center justify-between gap-3">
+                  <span>Cycle Tracks</span>
+                  <input
+                    type="checkbox"
+                    checked={cycleBackgrounds}
+                    onChange={(e) => setCycleBackgrounds(e.target.checked)}
+                    className="h-4 w-4 accent-cyan-400"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3">
+                  <span>Multi-Color Pulse</span>
+                  <input
+                    type="checkbox"
+                    checked={multiColorPulse}
+                    onChange={(e) => setMultiColorPulse(e.target.checked)}
+                    className="h-4 w-4 accent-cyan-400"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3">
+                  <span>Background</span>
+                  <select
+                    value={backgroundChoice}
+                    onChange={(e) => setBackgroundChoice(e.target.value as BackgroundType)}
+                    disabled={cycleBackgrounds}
+                    className="bg-black/60 border border-white/10 text-[9px] uppercase tracking-[0.15em] px-2 py-1 text-white/70 disabled:opacity-40"
+                  >
+                    {backgroundOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center justify-between gap-3">
+                  <span>Pulse Color</span>
+                  <input
+                    type="color"
+                    value={backgroundColor}
+                    onChange={(e) => setBackgroundColor(e.target.value)}
+                    className="h-6 w-10 border border-white/20 bg-transparent"
+                  />
+                </label>
+                <p className="text-[9px] text-white/40 tracking-[0.15em]">
+                  Engineering grid runs in multicolor mode.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -408,47 +541,122 @@ export default function Home() {
 
       {/* BOOT */}
       {phase === "boot" && (
-        <div className="fixed inset-0 bg-black text-green-500 font-mono p-4 sm:p-8 text-xs sm:text-sm leading-relaxed flex flex-col z-40">
-          <div className="flex-1 space-y-1 sm:space-y-2 overflow-hidden">
-            {[
-              "INITIALIZING_CORE_SERVICES... OK",
-              "SCANNING_DSP_HARDWARE... [3-BAND_EQ_DETECTED]",
-              "MOUNTING_ID3_METADATA_MODULE... OK",
-              "CALIBRATING_WAVEFORM_ANALYSER... OK",
-              "LOADING_AUDIO_WORKLETS... OK",
-              "CONFIGURING_LIMITER_PROCESSOR... OK",
-              "SYNCING_MASTER_CLOCK... OK",
-              "---------------------------------------",
-              "READY_FOR_OPERATOR_INPUT.",
-            ].map((m, i) => (
-              <div 
-                key={i} 
-                className="animate-fade-in break-all sm:break-normal" 
-                style={{ animationDelay: `${i * 120}ms` }}
-              >
-                <span className="text-green-400/60">{">"}</span> {m}
+        <div className="fixed inset-0 bg-black text-white font-mono p-4 sm:p-8 flex flex-col items-center justify-center z-40">
+          <div className="absolute inset-0 bg-gradient-to-br from-black via-[#0c0c12] to-[#332610]/70" />
+          <div className="relative w-full max-w-2xl border border-white/10 bg-black/60 backdrop-blur-xl p-6 sm:p-10 shadow-[0_0_40px_rgba(212,175,55,0.15)]">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <p className="text-[10px] tracking-[0.4em] text-cyan-400 uppercase">NEXUS BOOT SEQUENCE</p>
+                <h2 className="text-3xl sm:text-4xl font-black tracking-tight mt-2">Neon Sky Nexus</h2>
+                <p className="text-[11px] text-white/50 uppercase tracking-[0.25em] mt-2">Synth Core Initialization</p>
               </div>
-            ))}
-            <div className="mt-6 sm:mt-8 animate-pulse flex items-center gap-2">
-              <span className="w-2 h-4 bg-green-500/80" />
-              <span className="text-green-400/80">AWAITING_SYSTEM_INIT</span>
+              <div className="h-12 w-12 border border-cyan-500/40 grid place-items-center">
+                <Terminal className="text-cyan-300" size={22} />
+              </div>
             </div>
+            <div className="space-y-4 text-[11px] sm:text-xs tracking-[0.18em] uppercase">
+              {[
+                "Core Matrix Online",
+                "DSP Suite Calibrated (5-BAND_EQ)",
+                "Visualizer Channel Sync",
+                "Limiter + Meter Worklets Ready",
+                "Playlist Memory Linked",
+              ].map((m, i) => (
+                <div key={m} className="space-y-2 animate-fade-in" style={{ animationDelay: `${i * 120}ms` }}>
+                  <div className="flex items-center justify-between text-white/70">
+                    <span>{m}</span>
+                    <span className="text-cyan-400">OK</span>
+                  </div>
+                  <div className="h-1.5 bg-white/10">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-500 to-[#d4af37] animate-pulse"
+                      style={{ width: `${70 + i * 6}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-8 flex items-center justify-between text-[10px] text-white/50 uppercase tracking-[0.3em]">
+              <span>Awaiting Operator Input</span>
+              <div className="h-2 w-2 bg-cyan-400 animate-pulse" />
+            </div>
+            <button
+              onClick={handleInit}
+              className="mt-6 w-full py-4 border border-cyan-500/60 text-cyan-200 font-bold hover:bg-cyan-500 hover:text-black transition-all uppercase tracking-[0.25em] text-sm active:scale-[0.98] rounded-none"
+            >
+              Initialize Core
+            </button>
           </div>
-
-          <button
-            onClick={handleInit}
-            className="w-full py-5 sm:py-6 border-2 border-green-500/50 text-green-400 font-bold hover:bg-green-500 hover:text-black transition-all uppercase tracking-[0.2em] sm:tracking-[0.3em] text-sm sm:text-base active:scale-[0.98] rounded-lg hover:shadow-[0_0_30px_rgba(34,197,94,0.3)]"
-          >
-            Initialize Core
-          </button>
         </div>
       )}
 
       {/* PLAYER */}
       {phase === "player" && (
         <>
-          <main className="relative z-10 flex flex-col items-center justify-center min-h-screen min-h-[100dvh] p-3 sm:p-6">
-            <div className="w-full max-w-[360px] sm:max-w-md glass-card rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl flex flex-col items-center gap-5 sm:gap-6 animate-scale-in">
+          {isMobile && compactMode && (
+            <div className="fixed bottom-4 left-3 right-3 z-40 glass-card rounded-none p-3 flex flex-col gap-3 shadow-2xl">
+              <div className="border border-white/10 bg-black/40 px-3 py-2 overflow-hidden">
+                <div className="marquee text-[10px] uppercase tracking-[0.3em] text-white/60">
+                  <span>{track.artist || "Unknown Artist"}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-10 w-10 border border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/10 transition-all active:scale-95"
+                  aria-label="Load track"
+                >
+                  <Upload size={16} className="mx-auto" />
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={prevTrack}
+                    disabled={playlist.length <= 1 || currentIndex === 0}
+                    className={cx(
+                      "h-10 w-10 border transition-all active:scale-95",
+                      playlist.length > 1 && currentIndex > 0
+                        ? "border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/10"
+                        : "border-white/5 bg-white/5 text-white/20 cursor-not-allowed"
+                    )}
+                    aria-label="Previous track"
+                  >
+                    <SkipBack size={16} className="mx-auto" />
+                  </button>
+                  <button
+                    onClick={() => void togglePlay()}
+                    className="h-12 w-12 border border-cyan-500/60 bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/40 transition-all active:scale-95"
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                  >
+                    {isPlaying ? <Pause size={18} className="mx-auto" /> : <Play size={18} className="mx-auto" />}
+                  </button>
+                  <button
+                    onClick={nextTrack}
+                    disabled={playlist.length <= 1 || currentIndex >= playlist.length - 1}
+                    className={cx(
+                      "h-10 w-10 border transition-all active:scale-95",
+                      playlist.length > 1 && currentIndex < playlist.length - 1
+                        ? "border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/10"
+                        : "border-white/5 bg-white/5 text-white/20 cursor-not-allowed"
+                    )}
+                    aria-label="Next track"
+                  >
+                    <SkipForward size={16} className="mx-auto" />
+                  </button>
+                </div>
+                <button
+                  onClick={() => setCompactMode(false)}
+                  className="h-10 w-10 border border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 transition-all active:scale-95"
+                  aria-label="Expand player"
+                >
+                  <ChevronUp size={16} className="mx-auto" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {(!isMobile || !compactMode) && (
+            <main className="relative z-10 flex flex-col items-center justify-center min-h-screen min-h-[100dvh] p-3 sm:p-6">
+              <div className="w-full max-w-[360px] sm:max-w-md glass-card rounded-none p-6 sm:p-10 shadow-2xl flex flex-col items-center gap-5 sm:gap-6 animate-scale-in">
               
               {/* Header */}
               <div className="w-full flex items-center justify-between">
@@ -461,6 +669,15 @@ export default function Home() {
                   <span className="text-[9px] tracking-[0.2em] text-white/40 uppercase">
                     {isPlaying ? 'PLAYING' : 'READY'}
                   </span>
+                  {isMobile && (
+                    <button
+                      onClick={() => setCompactMode(true)}
+                      className="ml-2 h-6 w-6 border border-white/10 bg-white/5 text-white/60 hover:text-white transition-all"
+                      aria-label="Collapse player"
+                    >
+                      <ChevronDown size={12} className="mx-auto" />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -679,13 +896,13 @@ export default function Home() {
                 <div className="flex gap-3 sm:gap-4">
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 btn-glass py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
+                    className="flex-1 btn-glass py-3.5 sm:py-4 rounded-none flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase active:scale-95"
                   >
                     <Upload size={14} /> Load
                   </button>
                   <button
                     onClick={() => setSuiteOpen(true)}
-                    className="flex-1 btn-primary py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase text-black active:scale-95"
+                    className="flex-1 btn-primary py-3.5 sm:py-4 rounded-none flex items-center justify-center gap-2 text-[10px] sm:text-[11px] font-bold tracking-[0.2em] sm:tracking-[0.25em] uppercase text-black active:scale-95"
                   >
                     <Settings size={14} /> Suite
                   </button>
@@ -693,7 +910,7 @@ export default function Home() {
                     onClick={() => setQueueOpen(true)}
                     disabled={playlist.length === 0}
                     className={cx(
-                      "w-14 sm:w-16 btn-glass py-3.5 sm:py-4 rounded-2xl flex items-center justify-center transition-all active:scale-95",
+                      "w-14 sm:w-16 btn-glass py-3.5 sm:py-4 rounded-none flex items-center justify-center transition-all active:scale-95",
                       playlist.length ? "text-white" : "text-white/20 cursor-not-allowed"
                     )}
                     aria-label="Queue"
@@ -703,12 +920,13 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          </main>
+            </main>
+          )}
 
           {/* Queue (playlist) */}
           {queueOpen && (
             <div className="fixed inset-0 z-[55] bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-3 animate-fade-in">
-              <div className="w-full max-w-md glass-card rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl overflow-hidden animate-slide-up">
+              <div className="w-full max-w-md glass-card rounded-none shadow-2xl overflow-hidden animate-slide-up">
                 <div className="px-6 py-5 flex items-center justify-between border-b border-white/10">
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
@@ -1136,7 +1354,7 @@ export default function Home() {
                 <div className="lg:col-span-8 flex flex-col gap-5 sm:gap-6">
                   
                   {/* EQ Panel */}
-                  <div className="glass-card rounded-2xl sm:rounded-[2.5rem] p-5 sm:p-8 shadow-2xl overflow-hidden">
+                  <div className="glass-card rounded-none p-5 sm:p-8 shadow-2xl overflow-hidden">
                     <div className="flex justify-between items-center mb-5 sm:mb-6">
                       <div className="flex items-center gap-2">
                         <Radio size={14} className="text-white/30" />
@@ -1155,7 +1373,7 @@ export default function Home() {
                       onMouseDown={onGraphMouseDown}
                       onTouchStart={onGraphTouchStart}
                       onTouchMove={onGraphTouchMove}
-                      className="relative h-40 sm:h-52 w-full border border-white/5 bg-gradient-to-b from-zinc-950/80 to-black/90 rounded-2xl cursor-crosshair overflow-hidden touch-none"
+                      className="relative h-40 sm:h-52 w-full border border-white/5 bg-gradient-to-b from-zinc-950/80 to-black/90 rounded-none cursor-crosshair overflow-hidden touch-none"
                     >
                       {/* Grid lines */}
                       <div className="absolute inset-0 opacity-20">
@@ -1168,17 +1386,16 @@ export default function Home() {
                         }} />
                       </div>
                       
-                      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-80">
+                      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-80" viewBox="0 0 100 160">
                         <path
-                          d={`M 0 ${80} Q 25% ${80 - eq.low * 2.8}, 50% ${80 - eq.mid * 2.8} T 100% ${80 - eq.high * 2.8}`}
-                          stroke={NEON.hex}
-                          strokeWidth="2.5"
+                          d={`M 0 ${eqBaseLine} L 100 ${eqBaseLine}`}
+                          stroke="rgba(255,255,255,0.2)"
+                          strokeWidth="1.5"
                           fill="none"
-                          className="transition-all duration-300 drop-shadow-[0_0_8px_rgba(188,19,254,0.5)]"
-                          style={{ display: 'none' }}
+                          strokeDasharray="4 6"
                         />
                         <path
-                          d={`M 0 104 Q 25% ${104 - eq.low * 3.8}, 50% ${104 - eq.mid * 3.8} T 100% ${104 - eq.high * 3.8}`}
+                          d={eqActivePath}
                           stroke={NEON.hex}
                           strokeWidth="2.5"
                           fill="none"
@@ -1186,28 +1403,38 @@ export default function Home() {
                         />
                       </svg>
 
-                      <div className="absolute inset-0 flex items-center justify-around px-8 sm:px-14">
-                        {(["low", "mid", "high"] as Band[]).map((band) => (
+                      <div className="absolute inset-0 flex items-center justify-between px-6 sm:px-10">
+                        {eqBands.map((band) => (
                           <div
                             key={band}
                             className={cx(
-                              "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 transition-all duration-200",
-                              activeBand === band 
-                                ? "bg-cyan-400 border-white scale-125 shadow-[0_0_20px_rgba(188,19,254,0.8)]" 
+                              "w-3 h-3 sm:w-3.5 sm:h-3.5 border-2 transition-all duration-200",
+                              activeBand === band
+                                ? "bg-cyan-400 border-white scale-125 shadow-[0_0_18px_rgba(188,19,254,0.8)]"
                                 : "bg-transparent border-white/30 hover:border-white/50"
                             )}
                             style={{ transform: `translateY(${-eq[band] * 1.6}px)` }}
                           />
                         ))}
                       </div>
+
+                      <div className="absolute bottom-2 left-3 right-3 flex justify-between text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                        <span>0</span>
+                        <span>60</span>
+                        <span>250</span>
+                        <span>1k</span>
+                        <span>4k</span>
+                        <span>8k</span>
+                        <span>16k</span>
+                      </div>
                     </div>
 
-                    <div className="mt-5 sm:mt-6 grid grid-cols-3 gap-3 sm:gap-4">
-                      {(["low", "mid", "high"] as Band[]).map((band) => (
+                    <div className="mt-5 sm:mt-6 grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+                      {eqBands.map((band) => (
                         <div 
                           key={band} 
                           className={cx(
-                            "p-4 sm:p-5 rounded-2xl border transition-all",
+                            "p-4 sm:p-5 rounded-none border transition-all",
                             activeBand === band 
                               ? "bg-zinc-900/80 border-cyan-500/40 neon-glow-sm" 
                               : "bg-zinc-950/50 border-white/5"
@@ -1226,7 +1453,7 @@ export default function Home() {
                             value={eq[band]}
                             onChange={(e) => applyBandGain(band, parseInt(e.target.value, 10))}
                             onFocus={() => setActiveBand(band)}
-                            className="w-full"
+                            className="w-full eq-slider"
                           />
                         </div>
                       ))}

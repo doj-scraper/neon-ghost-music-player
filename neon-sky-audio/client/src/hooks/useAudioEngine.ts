@@ -6,7 +6,7 @@ import { clearStoredPlaylist, loadStoredPlaylist, saveStoredPlaylist } from "@/l
 
 export type Phase = "splash" | "boot" | "player";
 export type VizMode = "spectrum" | "oscilloscope" | "vectorscope";
-export type Band = "low" | "mid" | "high";
+export type Band = "sub" | "low" | "mid" | "high" | "air";
 export type PlaybackState = "idle" | "initializing" | "ready" | "playing" | "paused" | "error";
 
 type CompressorSettings = {
@@ -100,6 +100,13 @@ type ResumeState = {
 };
 
 const RESUME_STATE_KEY = "neon-resume-state";
+const DEFAULT_EQ: Record<Band, number> = {
+  sub: 0,
+  low: 0,
+  mid: 0,
+  high: 0,
+  air: 0,
+};
 
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 const dbToGain = (db: number) => Math.pow(10, db / 20);
@@ -594,7 +601,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const [visualizerFps, setVisualizerFps] = useState(60);
   const [visualizerBlocked, setVisualizerBlocked] = useState(false);
   const [activeBand, setActiveBand] = useState<Band>("mid");
-  const [eq, setEq] = useState<Record<Band, number>>({ low: 0, mid: 0, high: 0 });
+  const [eq, setEq] = useState<Record<Band, number>>(DEFAULT_EQ);
   const [compressor, setCompressor] = useState<CompressorSettings>({
     threshold: -18,
     ratio: 2,
@@ -751,7 +758,13 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   const limiterRef = useRef<AudioWorkletNode | null>(null);
   const outputGainRef = useRef<GainNode | null>(null);
   const gainRef = outputGainRef;
-  const filtersRef = useRef<Record<Band, BiquadFilterNode | null>>({ low: null, mid: null, high: null });
+  const filtersRef = useRef<Record<Band, BiquadFilterNode | null>>({
+    sub: null,
+    low: null,
+    mid: null,
+    high: null,
+    air: null,
+  });
   const vizSplitRef = useRef<ChannelSplitterNode | null>(null);
   const vizAnalyserLRef = useRef<AnalyserNode | null>(null);
   const vizAnalyserRRef = useRef<AnalyserNode | null>(null);
@@ -841,14 +854,16 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   }, []);
 
   useEffect(() => {
-    const { low, mid, high } = filtersRef.current;
+    const { sub, low, mid, high, air } = filtersRef.current;
+    if (sub) sub.gain.value = eq.sub;
     if (low) low.gain.value = eq.low;
     if (mid) mid.gain.value = eq.mid;
     if (high) high.gain.value = eq.high;
-  }, [eq.high, eq.low, eq.mid]);
+    if (air) air.gain.value = eq.air;
+  }, [eq.air, eq.high, eq.low, eq.mid, eq.sub]);
 
   const resetEq = useCallback(() => {
-    (["low", "mid", "high"] as Band[]).forEach((band) => applyBandGain(band, 0));
+    (["sub", "low", "mid", "high", "air"] as Band[]).forEach((band) => applyBandGain(band, 0));
   }, [applyBandGain]);
 
   const handleGraphDrag = useCallback(
@@ -861,8 +876,10 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
       const y = (clientY - rect.top) / rect.height;
 
       let band: Band = "mid";
-      if (x < 0.33) band = "low";
-      else if (x > 0.66) band = "high";
+      if (x < 0.2) band = "sub";
+      else if (x < 0.4) band = "low";
+      else if (x > 0.8) band = "air";
+      else if (x > 0.6) band = "high";
 
       const gainDb = Math.round((0.5 - y) * 48);
       applyBandGain(band, gainDb);
@@ -1383,7 +1400,7 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   );
 
   const applyPreset = useCallback((preset: MasteringPreset) => {
-    setEq(preset.eq);
+    setEq({ ...DEFAULT_EQ, ...preset.eq });
     setCompressor(preset.compressor);
     setLimiter(preset.limiter);
     setSaturation(preset.saturation);
@@ -1457,9 +1474,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const source = offlineContext.createBufferSource();
     source.buffer = decoded;
 
+    const sub = offlineContext.createBiquadFilter();
+    sub.type = "lowshelf";
+    sub.frequency.value = 80;
+    sub.gain.value = eq.sub;
+
     const low = offlineContext.createBiquadFilter();
-    low.type = "lowshelf";
+    low.type = "peaking";
     low.frequency.value = 250;
+    low.Q.value = 0.9;
     low.gain.value = eq.low;
 
     const mid = offlineContext.createBiquadFilter();
@@ -1469,9 +1492,15 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     mid.gain.value = eq.mid;
 
     const high = offlineContext.createBiquadFilter();
-    high.type = "highshelf";
-    high.frequency.value = 5000;
+    high.type = "peaking";
+    high.frequency.value = 4000;
+    high.Q.value = 1.1;
     high.gain.value = eq.high;
+
+    const air = offlineContext.createBiquadFilter();
+    air.type = "highshelf";
+    air.frequency.value = 12000;
+    air.gain.value = eq.air;
 
     const compressorNode = offlineContext.createDynamicsCompressor();
     compressorNode.threshold.value = compressor.bypass ? 0 : compressor.threshold;
@@ -1523,10 +1552,12 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
     const trim = output.bypass ? 0 : output.trim;
     gain.gain.value = volume * dbToGain(trim);
 
-    source.connect(low);
+    source.connect(sub);
+    sub.connect(low);
     low.connect(mid);
     mid.connect(high);
-    high.connect(compressorNode);
+    high.connect(air);
+    air.connect(compressorNode);
     compressorNode.connect(makeup);
     makeup.connect(satDry);
     makeup.connect(shaper);
@@ -1566,9 +1597,11 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
   }, [
     compressor,
     currentIndex,
+    eq.air,
     eq.high,
     eq.low,
     eq.mid,
+    eq.sub,
     limiter,
     normalizeLoudness,
     output,
@@ -1789,26 +1822,43 @@ export const useAudioEngine = ({ visualizerColor, visualizerActive, visualizerPu
 
         outputGainRef.current = audioCtxRef.current.createGain();
 
+        const sub = audioCtxRef.current.createBiquadFilter();
+        sub.type = "lowshelf";
+        sub.frequency.value = 80;
+        sub.gain.value = eq.sub;
+
         const low = audioCtxRef.current.createBiquadFilter();
-        low.type = "lowshelf";
+        low.type = "peaking";
         low.frequency.value = 250;
+        low.Q.value = 0.9;
+        low.gain.value = eq.low;
 
         const mid = audioCtxRef.current.createBiquadFilter();
         mid.type = "peaking";
         mid.frequency.value = 1000;
         mid.Q.value = 1.0;
+        mid.gain.value = eq.mid;
 
         const high = audioCtxRef.current.createBiquadFilter();
-        high.type = "highshelf";
-        high.frequency.value = 5000;
+        high.type = "peaking";
+        high.frequency.value = 4000;
+        high.Q.value = 1.1;
+        high.gain.value = eq.high;
 
-        filtersRef.current = { low, mid, high };
+        const air = audioCtxRef.current.createBiquadFilter();
+        air.type = "highshelf";
+        air.frequency.value = 12000;
+        air.gain.value = eq.air;
+
+        filtersRef.current = { sub, low, mid, high, air };
 
         sourceRef.current = audioCtxRef.current.createMediaElementSource(audioEl);
-        sourceRef.current.connect(low);
+        sourceRef.current.connect(sub);
+        sub.connect(low);
         low.connect(mid);
         mid.connect(high);
-        high.connect(compressorRef.current);
+        high.connect(air);
+        air.connect(compressorRef.current);
         compressorRef.current.connect(compressorMakeupRef.current);
         compressorMakeupRef.current.connect(saturationDryGainRef.current);
         compressorMakeupRef.current.connect(saturationShaperRef.current);
