@@ -283,6 +283,61 @@
       max-width: 1280px;
     }
   }
+
+  .eq-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 2px;
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.18);
+    outline: none;
+  }
+
+  .eq-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 0;
+    background: #d4af37;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 0 10px rgba(212, 175, 55, 0.4);
+  }
+
+  .eq-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 0;
+    background: #d4af37;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 0 10px rgba(212, 175, 55, 0.4);
+  }
+
+  .eq-slider::-moz-range-track {
+    height: 2px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  .marquee {
+    position: relative;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .marquee span {
+    display: inline-block;
+    padding-left: 100%;
+    animation: marquee 10s linear infinite;
+  }
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
 }
 
 /* Custom animations for NEON SKY */
