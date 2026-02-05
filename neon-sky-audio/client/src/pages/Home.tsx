@@ -107,6 +107,41 @@ const toDb = (gain: number) => 20 * Math.log10(Math.max(gain, 0.000001));
 const clampValue = (n: number, min: number, max: number) =>
   Math.min(max, Math.max(min, n));
 
+const createSmoothPath = (points: Array<{ x: number; y: number }>) => {
+  if (points.length === 0) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const prev = points[i - 1];
+    const current = points[i];
+    const controlX = (prev.x + current.x) / 2;
+    path += ` C ${controlX} ${prev.y}, ${controlX} ${current.y}, ${current.x} ${current.y}`;
+  }
+  return path;
+};
+
+const interpolateValue = (
+  x: number,
+  anchors: Array<{ x: number; y: number }>
+) => {
+  if (anchors.length === 0) return 0;
+  if (x <= anchors[0].x) return anchors[0].y;
+  if (x >= anchors[anchors.length - 1].x) return anchors[anchors.length - 1].y;
+
+  for (let i = 1; i < anchors.length; i += 1) {
+    const prev = anchors[i - 1];
+    const current = anchors[i];
+    if (x <= current.x) {
+      const range = current.x - prev.x || 1;
+      const t = (x - prev.x) / range;
+      return prev.y + (current.y - prev.y) * t;
+    }
+  }
+
+  return anchors[anchors.length - 1].y;
+};
+
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
@@ -373,14 +408,47 @@ export default function Home() {
   );
   const eqBaseLine = 80;
   const eqScale = 2.4;
+  const eqAnchorPoints = useMemo(
+    () =>
+      eqBands.map(band => ({
+        x: eqBandPositions[band] * 100,
+        y: eqBaseLine - eq[band] * eqScale,
+      })),
+    [eq, eqBands, eqBandPositions]
+  );
   const eqActivePath = useMemo(() => {
-    const points = eqBands.map(band => {
-      const x = eqBandPositions[band] * 100;
-      const y = eqBaseLine - eq[band] * eqScale;
-      return `${x} ${y}`;
+    const start = { x: 0, y: eqBaseLine };
+    const end = { x: 100, y: eqBaseLine };
+    return createSmoothPath([start, ...eqAnchorPoints, end]);
+  }, [eqAnchorPoints]);
+
+  const eqWavePath = useMemo(() => {
+    const samples = 36;
+    const phaseOffset = progressNowSeconds * 6;
+    const playbackBoost =
+      playbackState === "playing"
+        ? clampValue((toDb(Math.max(meter.rms, 0.000001)) + 55) / 45, 0, 1)
+        : 0;
+    const amplitude = 0.6 + playbackBoost * 8;
+
+    const wavePoints = Array.from({ length: samples + 1 }, (_, i) => {
+      const x = (i / samples) * 100;
+      const eqOffset = interpolateValue(x, eqAnchorPoints) - eqBaseLine;
+      const envelope = 1 - Math.pow(Math.abs(x - 50) / 52, 1.6);
+      const harmonic =
+        Math.sin((x / 100) * Math.PI * 7 + phaseOffset) *
+          (0.85 + playbackBoost * 0.8) +
+        Math.sin((x / 100) * Math.PI * 15 - phaseOffset * 1.4) *
+          (0.25 + playbackBoost * 0.3);
+      const y = eqBaseLine + eqOffset * 0.55 - harmonic * amplitude * envelope;
+      return {
+        x,
+        y: clampValue(y, 22, 140),
+      };
     });
-    return `M 0 ${eqBaseLine} L ${points.join(" L ")} L 100 ${eqBaseLine}`;
-  }, [eq, eqBands, eqBandPositions]);
+
+    return createSmoothPath(wavePoints);
+  }, [eqAnchorPoints, meter.rms, playbackState, progressNowSeconds]);
 
   const toggleSelected = (id: string) => {
     setSelectedIds(prev => {
@@ -1467,9 +1535,9 @@ export default function Home() {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 space-y-6 sm:space-y-10">
-              <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-10">
+              <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 sm:gap-10">
                 {/* Left Column */}
-                <div className="lg:col-span-4 flex flex-col gap-5 sm:gap-8">
+                <div className="md:col-span-1 lg:col-span-4 flex flex-col gap-5 sm:gap-8">
                   {/* Metering Panel */}
                   <div className="glass-card rounded-2xl sm:rounded-3xl p-5 sm:p-6 space-y-4">
                     <div className="flex items-center gap-2">
@@ -1726,7 +1794,7 @@ export default function Home() {
                 </div>
 
                 {/* Right Column */}
-                <div className="lg:col-span-8 flex flex-col gap-5 sm:gap-6">
+                <div className="md:col-span-2 lg:col-span-8 flex flex-col gap-5 sm:gap-6">
                   {/* EQ Panel */}
                   <div className="glass-card rounded-none p-5 sm:p-8 shadow-2xl overflow-hidden">
                     <div className="flex justify-between items-center mb-5 sm:mb-6">
@@ -1749,7 +1817,7 @@ export default function Home() {
                       onMouseDown={onGraphMouseDown}
                       onTouchStart={onGraphTouchStart}
                       onTouchMove={onGraphTouchMove}
-                      className="relative h-40 sm:h-52 w-full border border-white/5 bg-gradient-to-b from-zinc-950/80 to-black/90 rounded-none cursor-crosshair overflow-hidden touch-none"
+                      className="relative h-44 sm:h-52 lg:h-56 w-full border border-white/5 bg-gradient-to-b from-zinc-950/80 to-black/90 rounded-none cursor-crosshair overflow-hidden touch-none"
                     >
                       {/* Grid lines */}
                       <div className="absolute inset-0 opacity-20">
@@ -1783,6 +1851,14 @@ export default function Home() {
                           fill="none"
                           className="transition-all duration-300 drop-shadow-[0_0_10px_rgba(188,19,254,0.6)]"
                         />
+                        <path
+                          d={eqWavePath}
+                          stroke="rgba(34,211,238,0.9)"
+                          strokeWidth="1.6"
+                          fill="none"
+                          strokeLinecap="round"
+                          className="transition-all duration-150 drop-shadow-[0_0_14px_rgba(34,211,238,0.55)]"
+                        />
                       </svg>
 
                       <div className="absolute inset-0 flex items-center justify-between px-6 sm:px-10">
@@ -1802,13 +1878,13 @@ export default function Home() {
                         ))}
                       </div>
 
-                      <div className="absolute bottom-2 left-3 right-3 flex justify-between text-[9px] text-white/40 uppercase tracking-[0.2em]">
+                      <div className="absolute bottom-2 left-3 right-3 flex justify-between text-[8px] sm:text-[9px] text-white/40 uppercase tracking-[0.16em] sm:tracking-[0.2em]">
                         <span>0</span>
-                        <span>60</span>
+                        <span className="hidden sm:inline">60</span>
                         <span>250</span>
                         <span>1k</span>
                         <span>4k</span>
-                        <span>8k</span>
+                        <span className="hidden sm:inline">8k</span>
                         <span>16k</span>
                       </div>
                     </div>
